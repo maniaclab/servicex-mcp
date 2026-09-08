@@ -1,0 +1,276 @@
+"""CIMD — Client ID Metadata Document support.
+
+Implements ``draft-ietf-oauth-client-id-metadata-document``: the OAuth
+``client_id`` is itself an HTTPS URL that dereferences to the client's OAuth
+metadata.  Unlike DCR (RFC 7591), there is no ``POST /register`` round-trip and
+no server-side per-client database — the authorization server fetches the
+``client_id`` URL at ``/authorize``, verifies the document is self-referential,
+and validates the requested ``redirect_uri`` against the document's list.
+
+This removes the DCR restart-fragility entirely (no in-memory registry to lose)
+and avoids unbounded registration growth on hosted deployments.  Same rationale
+as rucio-mcp: https://github.com/kratsg/rucio-mcp/issues/33.
+
+Claude selects CIMD only when the AS metadata advertises both
+``client_id_metadata_document_supported: true`` and ``"none"`` in
+``token_endpoint_auth_methods_supported`` (the CIMD client authenticates as a
+public client — PKCE only, no secret).  Both are set in ``server.py``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import ipaddress
+import logging
+import socket
+from collections.abc import Callable
+from typing import Any
+from urllib.parse import urlparse
+
+import httpx2
+from mcp.shared.auth import OAuthClientInformationFull
+from pydantic import AnyUrl, ValidationError
+
+_log = logging.getLogger(__name__)
+
+# Guards for the server-side fetch of an attacker-influenceable URL.
+_MAX_DOC_BYTES = 64 * 1024
+_FETCH_TIMEOUT = 10.0
+
+# socket.getaddrinfo-compatible resolver; injectable so SSRF checks are testable
+# without real DNS.  The result may be a plain list (sync test resolver) or an
+# awaitable (the default asyncio loop.getaddrinfo); assert_safe_url handles both.
+Resolver = Callable[..., Any]
+
+_LOOPBACK_HOSTS = frozenset({"localhost"})
+
+
+class CimdError(Exception):
+    """Raised when a CIMD client_id URL or its document is invalid or unsafe."""
+
+
+def is_cimd_client_id(client_id: str) -> bool:
+    """Return True if *client_id* is an ``https://`` URL (CIMD), not a DCR id.
+
+    DCR-issued ids are opaque strings (e.g. UUIDs); CIMD ids are HTTPS URLs.
+    """
+    try:
+        parsed = urlparse(client_id)
+    except ValueError:
+        return False
+    return parsed.scheme == "https" and bool(parsed.netloc)
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    if host is None:
+        return False
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def redirect_uri_matches(requested: str, declared: str) -> bool:
+    """Return True if *requested* matches *declared*, ignoring the port for loopback.
+
+    Exact string equality always matches.  For loopback / ``localhost`` redirect
+    URIs the port is ignored (RFC 8252 §7.3): native apps — including Claude Code,
+    which declares ``http://localhost/callback`` in its CIMD — bind an ephemeral
+    loopback port at runtime.  Host identity, scheme, and path must still match.
+    """
+    if requested == declared:
+        return True
+    rp = urlparse(requested)
+    dp = urlparse(declared)
+    if not (_is_loopback_host(rp.hostname) and _is_loopback_host(dp.hostname)):
+        return False
+    return rp.scheme == dp.scheme and rp.hostname == dp.hostname and rp.path == dp.path
+
+
+def _ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+async def assert_safe_url(
+    client_id_url: str, *, resolver: Resolver | None = None
+) -> None:
+    """Raise :class:`CimdError` unless *client_id_url* is safe to fetch server-side.
+
+    The server dereferences a URL the client controls, so this is the SSRF
+    guard: requires ``https``, and rejects hosts that are — or resolve to —
+    private, loopback, link-local, multicast, reserved, or unspecified addresses.
+
+    DNS resolution is offloaded to the event loop's resolver
+    (``loop.getaddrinfo``) so a blackholed nameserver cannot stall the event
+    loop for the OS resolver timeout.  Tests inject a synchronous *resolver*.
+    """
+    parsed = urlparse(client_id_url)
+    if parsed.scheme != "https":
+        msg = "CIMD client_id must be an https URL"
+        raise CimdError(msg)
+    host = parsed.hostname
+    if not host:
+        msg = "CIMD client_id URL has no host"
+        raise CimdError(msg)
+
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if _ip_blocked(literal):
+            msg = f"CIMD client_id host {host} is not a public address"
+            raise CimdError(msg)
+        return
+
+    if resolver is None:
+        resolver = asyncio.get_running_loop().getaddrinfo
+    try:
+        result = resolver(host, parsed.port or 443, type=socket.SOCK_STREAM)
+        infos = await result if inspect.isawaitable(result) else result
+    except socket.gaierror as exc:
+        msg = f"cannot resolve CIMD host {host}: {exc}"
+        raise CimdError(msg) from exc
+    for info in infos:
+        addr = info[4][0]
+        if _ip_blocked(ipaddress.ip_address(addr)):
+            msg = f"CIMD host {host} resolves to non-public address {addr}"
+            raise CimdError(msg)
+
+
+async def fetch_client_document(
+    client_id_url: str,
+    *,
+    client: httpx2.AsyncClient | None = None,
+    timeout: float = _FETCH_TIMEOUT,
+    max_bytes: int = _MAX_DOC_BYTES,
+) -> dict[str, Any]:
+    """Fetch and JSON-parse the CIMD document at *client_id_url*.
+
+    ``follow_redirects`` is disabled: a redirect after the SSRF check could
+    bypass the resolved-address guard, and the self-reference check below also
+    assumes the document came from the requested URL.  Raises :class:`CimdError`
+    on any network, size, or parse failure.
+    """
+    owns_client = client is None
+    if client is None:
+        client = httpx2.AsyncClient(timeout=timeout, follow_redirects=False)
+    try:
+        response = await client.get(
+            client_id_url, headers={"Accept": "application/json"}
+        )
+        response.raise_for_status()
+    except httpx2.HTTPError as exc:
+        msg = f"failed to fetch CIMD document: {exc}"
+        raise CimdError(msg) from exc
+    finally:
+        if owns_client:
+            await client.aclose()
+
+    # httpx buffers the full body on a non-streaming GET, so .content / .json()
+    # remain available after the client is closed above.
+    if len(response.content) > max_bytes:
+        msg = "CIMD document too large"
+        raise CimdError(msg)
+    try:
+        parsed = response.json()
+    except ValueError as exc:
+        msg = f"CIMD document is not valid JSON: {exc}"
+        raise CimdError(msg) from exc
+    if not isinstance(parsed, dict):
+        msg = "CIMD document is not a JSON object"
+        raise CimdError(msg)
+    return parsed
+
+
+def client_with_requested_redirect(
+    client: OAuthClientInformationFull, requested_redirect_uri: str | None
+) -> OAuthClientInformationFull:
+    """Return *client*, with the requested redirect appended to a copy if needed.
+
+    If *requested_redirect_uri* matches one of the client's ``redirect_uris``
+    only port-agnostically (loopback), a copy with the exact requested value
+    appended is returned so the SDK's exact-match ``validate_redirect_uri()``
+    accepts it.  The copy is per-request and must never be cached: native apps
+    bind a fresh ephemeral loopback port on every authorization attempt, so a
+    cached port would reject every subsequent attempt.  Otherwise *client* is
+    returned unchanged so a non-matching redirect is rejected with a proper
+    OAuth error.
+    """
+    declared = [str(u) for u in client.redirect_uris or []]
+    if (
+        not requested_redirect_uri
+        or requested_redirect_uri in declared
+        or not any(redirect_uri_matches(requested_redirect_uri, d) for d in declared)
+    ):
+        return client
+    return client.model_copy(
+        update={
+            "redirect_uris": [
+                *(client.redirect_uris or []),
+                AnyUrl(requested_redirect_uri),
+            ]
+        }
+    )
+
+
+def build_client_from_document(
+    doc: dict[str, Any], client_id_url: str
+) -> OAuthClientInformationFull:
+    """Build a public-client :class:`OAuthClientInformationFull` from a CIMD doc.
+
+    Verifies the document is self-referential (its ``client_id`` equals the URL
+    it was served from).  The result carries only the document's declared
+    ``redirect_uris`` — an ephemeral-port loopback redirect is appended
+    per-request via :func:`client_with_requested_redirect`, never baked in here.
+    """
+    if doc.get("client_id") != client_id_url:
+        msg = "CIMD document is not self-referential (client_id mismatch)"
+        raise CimdError(msg)
+    declared = doc.get("redirect_uris")
+    if not declared or not isinstance(declared, list):
+        msg = "CIMD document has no redirect_uris"
+        raise CimdError(msg)
+
+    try:
+        return OAuthClientInformationFull(
+            client_id=client_id_url,
+            redirect_uris=[AnyUrl(str(u)) for u in declared],
+            # CIMD clients are public: PKCE-only, no client secret.  The MCP SDK
+            # ClientAuthenticator raises (→ 401) on a Python-None auth method.
+            token_endpoint_auth_method="none",
+            grant_types=doc.get("grant_types") or ["authorization_code"],
+            scope=doc.get("scope"),
+        )
+    except ValidationError as exc:
+        msg = f"invalid CIMD document: {exc}"
+        raise CimdError(msg) from exc
+
+
+async def resolve_cimd_client(
+    client_id: str,
+    *,
+    client: httpx2.AsyncClient | None = None,
+    timeout: float = _FETCH_TIMEOUT,
+) -> OAuthClientInformationFull:
+    """Resolve a CIMD ``client_id`` URL to an :class:`OAuthClientInformationFull`.
+
+    Validates the URL is safe to fetch, dereferences it, and builds a public
+    client carrying only the document's declared redirect URIs.  Raises
+    :class:`CimdError` on any failure.
+    """
+    await assert_safe_url(client_id)
+    doc = await fetch_client_document(client_id, client=client, timeout=timeout)
+    resolved = build_client_from_document(doc, client_id)
+    _log.info("Resolved CIMD client_id=%s", client_id)
+    return resolved
