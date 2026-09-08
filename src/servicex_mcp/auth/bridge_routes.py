@@ -49,8 +49,23 @@ def make_bridge_handlers(
         session = provider.store.get_by_session_id(session_id)
         if session is None:
             return Response("Session not found or expired", status_code=404)
+        if session.status == "done":
+            # Reject resubmission of an already-completed session rather than
+            # silently re-running submit_token: mark_done is idempotent for
+            # the ordinary double-submit case (browser retry/back-button),
+            # but that same idempotency would let a second, different token
+            # overwrite the first token/auth_code pair on a session whose
+            # code hasn't been exchanged yet. Retrying after a genuine
+            # validation *error* is still allowed (status stays "pending"
+            # only until success; "error" falls through to a normal retry).
+            return Response(
+                "This session has already completed sign-in.", status_code=400
+            )
         form = await request.form()
-        token = str(form.get("token", "")).strip()
+        raw_token = form.get("token")
+        # A multipart submission could put a file (UploadFile) under the
+        # "token" field name; only a real string is a submitted token.
+        token = raw_token.strip() if isinstance(raw_token, str) else ""
         if not token:
             return HTMLResponse(
                 _build_form_html(session_id=session_id, error="Token is required"),
@@ -64,8 +79,16 @@ def make_bridge_handlers(
                 status_code=400,
             )
         done_session = provider.store.get_by_session_id(session_id)
-        # session was popped only on /token exchange, not here — still present
-        assert done_session is not None
+        if done_session is None:
+            # The session's TTL (fixed at authorize() time, not extended by
+            # submit_token) can lapse between mark_done above and this
+            # lookup if validation took long enough — a real, if rare,
+            # timing window, not just a "can't happen" invariant.
+            return Response(
+                "Your session expired while validating the token. "
+                "Please restart the sign-in flow from your MCP client.",
+                status_code=400,
+            )
         params = {"code": done_session.auth_code}
         if done_session.state:
             params["state"] = done_session.state

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, MagicMock
 
 from mcp.server.auth.provider import AuthorizationParams
 from mcp.shared.auth import OAuthClientInformationFull
@@ -12,7 +13,10 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from servicex_mcp.auth.bridge_provider import ServiceXBridgeProvider
-from servicex_mcp.auth.bridge_routes import make_bridge_handlers
+from servicex_mcp.auth.bridge_routes import _build_form_html, make_bridge_handlers
+
+if TYPE_CHECKING:
+    from starlette.responses import Response
 
 
 def _make_provider() -> ServiceXBridgeProvider:
@@ -121,6 +125,66 @@ class TestBridgePost:
         assert "code=mcp-code-xyz" in location
         assert "state=oauth-state" in location
 
+    async def test_resubmitting_a_completed_session_is_rejected(self) -> None:
+        provider = _make_provider()
+        await _put_pending_session(provider, "abc")
+        provider.store.mark_done(
+            "abc", servicex_token="already-submitted", auth_code="mcp-code-xyz"
+        )
+        submit_token = AsyncMock()
+        provider.submit_token = submit_token  # type: ignore[method-assign]
+
+        client = TestClient(_make_app(provider), raise_server_exceptions=True)
+        resp = client.post("/bridge?session=abc", data={"token": "second-token"})
+        assert resp.status_code == 400
+        # A second, different token must never overwrite the first
+        # token/auth_code pair on an already-completed session.
+        submit_token.assert_not_called()
+
+    async def test_expired_between_mark_done_and_lookup_returns_graceful_400(
+        self,
+    ) -> None:
+        provider = _make_provider()
+        await _put_pending_session(provider, "abc")
+
+        async def _fake_submit_token(session_id: str, token: str) -> None:
+            provider.store.mark_done(
+                session_id, servicex_token=token, auth_code="mcp-code-xyz"
+            )
+            # Simulate the session's fixed TTL lapsing between mark_done and
+            # the handler's follow-up lookup.
+            session = provider.store.get_by_session_id(session_id)
+            assert session is not None
+            session.expires_at = 0.0
+
+        provider.submit_token = AsyncMock(side_effect=_fake_submit_token)  # type: ignore[method-assign]
+
+        client = TestClient(_make_app(provider), raise_server_exceptions=True)
+        resp = client.post("/bridge?session=abc", data={"token": "pasted-token"})
+        assert resp.status_code == 400
+        assert "expired" in resp.text.lower()
+
+    async def test_non_string_token_field_is_not_treated_as_a_token(self) -> None:
+        # A multipart submission can put a file (UploadFile, not a str) under
+        # the "token" field name; only a real string counts as a submitted
+        # token. Exercised directly against the handler (rather than via
+        # TestClient's real multipart encoding) to isolate the isinstance
+        # guard from unrelated SpooledTemporaryFile GC-timing noise.
+        provider = _make_provider()
+        await _put_pending_session(provider, "abc")
+        submit_token = AsyncMock()
+        provider.submit_token = submit_token  # type: ignore[method-assign]
+        _bridge_get, bridge_post = make_bridge_handlers(provider)
+
+        request = MagicMock()
+        request.query_params.get.return_value = "abc"
+        request.form = AsyncMock(return_value={"token": MagicMock(name="UploadFile")})
+
+        resp: Response = await bridge_post(request)  # type: ignore[misc]
+        assert resp.status_code == 400
+        assert "required" in bytes(resp.body).decode().lower()
+        submit_token.assert_not_called()
+
     async def test_invalid_token_returns_400_and_rerenders_form_with_error(
         self,
     ) -> None:
@@ -160,3 +224,13 @@ class TestBridgePost:
             "invalid refresh token" in resp.text.lower()
             or "invalid token" in resp.text.lower()
         )
+
+
+class TestBuildFormHtml:
+    def test_session_id_is_html_escaped(self) -> None:
+        # session_id can never actually contain markup in production (it's a
+        # secrets.token_urlsafe(32) output), but the escape must not silently
+        # regress if that scheme ever changes.
+        html_out = _build_form_html(session_id="<script>alert(1)</script>")
+        assert "<script>alert(1)</script>" not in html_out
+        assert "&lt;script&gt;" in html_out
