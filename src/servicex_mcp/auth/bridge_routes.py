@@ -13,6 +13,7 @@ POST /bridge?session=<sid>   — validate the pasted token; on success, 302
 
 from __future__ import annotations
 
+import html
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
@@ -85,7 +86,14 @@ def register_bridge_routes(mcp: MCPServer, provider: ServiceXBridgeProvider) -> 
 
 
 def _build_form_html(*, session_id: str, error: str | None = None) -> str:
-    error_html = f'<p style="color:#c00">{error}</p>' if error else ""
+    # Escape both values before interpolation: session_id is only reachable
+    # here after matching a secrets.token_urlsafe(32) session (safe in
+    # practice), but error ultimately wraps an exception raised by
+    # ServiceXAdapter/the ServiceX backend — never assume its text is safe
+    # to interpolate as raw HTML, since a future exception type or a
+    # compromised backend could echo attacker-influenced content into it.
+    safe_session_id = html.escape(session_id)
+    error_html = f'<p style="color:#c00">{html.escape(error)}</p>' if error else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -103,7 +111,7 @@ def _build_form_html(*, session_id: str, error: str | None = None) -> str:
   <p>Paste your ServiceX personal refresh token below (from your ServiceX
   deployment's web UI).</p>
   {error_html}
-  <form method="post" action="?session={session_id}">
+  <form method="post" action="?session={safe_session_id}">
     <input type="password" name="token" placeholder="ServiceX refresh token" required>
     <button type="submit">Connect</button>
   </form>

@@ -137,6 +137,25 @@ class TestBridgePost:
         resp = client.post("/bridge?session=abc", data={"token": "bad-token"})
         assert resp.status_code == 400
         assert "<form" in resp.text
+
+    async def test_error_message_is_html_escaped_in_rerendered_form(self) -> None:
+        # A future exception type (or a compromised ServiceX backend) could
+        # echo attacker-influenced content into the error message — the
+        # error text must never be interpolated into the page unescaped.
+        provider = _make_provider()
+        await _put_pending_session(provider, "abc")
+
+        async def _fake_submit_token(_session_id: str, _token: str) -> None:
+            msg = "<script>alert(1)</script>"
+            raise ValueError(msg)
+
+        provider.submit_token = AsyncMock(side_effect=_fake_submit_token)  # type: ignore[method-assign]
+
+        client = TestClient(_make_app(provider), raise_server_exceptions=True)
+        resp = client.post("/bridge?session=abc", data={"token": "bad-token"})
+        assert resp.status_code == 400
+        assert "<script>alert(1)</script>" not in resp.text
+        assert "&lt;script&gt;" in resp.text
         assert (
             "invalid refresh token" in resp.text.lower()
             or "invalid token" in resp.text.lower()
