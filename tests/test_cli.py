@@ -122,17 +122,114 @@ class TestCLIServe:
         # transport itself isn't forwarded to serve() (stdio-only for now);
         # its effect is dispatch, verified by test_serve_calls_run above.
 
-    def test_transport_http_exits_with_error(
+    def test_transport_http_without_backend_url_exits_with_error(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         with (
-            patch("sys.argv", ["servicex-mcp", "serve", "--transport", "http"]),
+            patch(
+                "sys.argv",
+                [
+                    "servicex-mcp",
+                    "serve",
+                    "--transport",
+                    "http",
+                    "--resource-url",
+                    "http://localhost:8000",
+                ],
+            ),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code != 0
         captured = capsys.readouterr()
-        assert "http" in captured.err.lower()
+        assert "--backend-url" in captured.err
+
+    def test_transport_http_without_resource_url_exits_with_error(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "servicex-mcp",
+                    "serve",
+                    "--transport",
+                    "http",
+                    "--backend-url",
+                    "https://servicex.example.com",
+                ],
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+        assert exc_info.value.code != 0
+        captured = capsys.readouterr()
+        assert "--resource-url" in captured.err
+
+    def test_transport_http_dispatches_to_serve_http(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_serve_http(**kwargs: object) -> None:
+            captured.update(kwargs)
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "servicex-mcp",
+                    "serve",
+                    "--transport",
+                    "http",
+                    "--backend-url",
+                    "https://servicex.example.com",
+                    "--resource-url",
+                    "http://localhost:8000",
+                ],
+            ),
+            patch("servicex_mcp.cli.serve_http", fake_serve_http),
+        ):
+            main()
+
+        assert captured["backend_url"] == "https://servicex.example.com"
+        assert captured["resource_url"] == "http://localhost:8000"
+        assert captured["host"] == "127.0.0.1"
+        assert captured["port"] == 8000
+        assert captured["read_only"] is False
+        assert captured["cache_dir"] == "/tmp/servicex_mcp_cache"
+
+    def test_transport_http_forwards_host_port_and_cache_dir(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_serve_http(**kwargs: object) -> None:
+            captured.update(kwargs)
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "servicex-mcp",
+                    "serve",
+                    "--transport",
+                    "http",
+                    "--backend-url",
+                    "https://servicex.example.com",
+                    "--resource-url",
+                    "http://localhost:8000",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    "9000",
+                    "--cache-dir",
+                    "/var/tmp/cache",
+                ],
+            ),
+            patch("servicex_mcp.cli.serve_http", fake_serve_http),
+        ):
+            main()
+
+        assert captured["host"] == "0.0.0.0"
+        assert captured["port"] == 9000
+        assert captured["cache_dir"] == "/var/tmp/cache"
 
     def test_transport_rejects_invalid_value(self) -> None:
         with (

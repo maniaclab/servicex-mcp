@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-from servicex_mcp.server import serve
+from servicex_mcp.server import serve, serve_http
 
 
 def main() -> None:
@@ -49,6 +49,23 @@ def main() -> None:
         choices=("debug", "info", "warning", "error"),
         help="Logging verbosity (default: info).",
     )
+    serve_parser.add_argument(
+        "--backend-url",
+        default=None,
+        metavar="URL",
+        help="Base URL of the ServiceX deployment (required for --transport http).",
+    )
+    serve_parser.add_argument(
+        "--resource-url",
+        default=None,
+        metavar="URL",
+        help="Public URL of this MCP server (required for --transport http).",
+    )
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument(
+        "--cache-dir", default="/tmp/servicex_mcp_cache", metavar="PATH"
+    )
 
     args = parser.parse_args()
 
@@ -67,11 +84,19 @@ def main() -> None:
                 read_only=args.read_only,
             )
         else:
-            # HTTP transport is wired in a later task (cli http args) --
-            # placeholder error until that task lands, so `--transport http`
-            # fails loudly rather than silently starting stdio.
-            sys.stderr.write("HTTP transport is not yet implemented.\n")
-            sys.exit(1)
+            if not args.backend_url or not args.resource_url:
+                parser.error(
+                    "--transport http requires --backend-url and --resource-url"
+                )
+
+            serve_http(
+                backend_url=args.backend_url,
+                resource_url=args.resource_url,
+                host=args.host,
+                port=args.port,
+                read_only=args.read_only,
+                cache_dir=args.cache_dir,
+            )
     else:
         parser.print_help()
         sys.exit(0)
