@@ -82,7 +82,14 @@ spec:
               protocol: TCP
           # servicex-mcp has no dedicated health-check endpoint yet (unlike
           # rucio-mcp's /healthz), so probes only confirm the MCP port accepts
-          # TCP connections rather than checking an HTTP path.
+          # TCP connections rather than checking an HTTP path. This is a real
+          # limitation for liveness in particular: a TCP handshake completes
+          # in the kernel's accept queue independent of whether the asyncio
+          # event loop behind it is actually servicing requests, so a hung
+          # or 500-ing-on-everything process can still pass this probe
+          # indefinitely. Add a real HTTP health endpoint to server.py and
+          # switch this to httpGet before relying on liveness to catch that
+          # class of failure.
           livenessProbe:
             tcpSocket:
               port: http
