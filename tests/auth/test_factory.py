@@ -1,10 +1,17 @@
-"""Tests for EnvBasedClientFactory."""
+"""Tests for ServiceXClientFactory and EnvBasedClientFactory."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from servicex_mcp.auth.factory import EnvBasedClientFactory
+import pytest
+
+from servicex_mcp.auth.factory import EnvBasedClientFactory, ServiceXClientFactory
+
+
+def test_factory_is_abstract() -> None:
+    with pytest.raises(TypeError):
+        ServiceXClientFactory()  # type: ignore[abstract]
 
 
 class TestEnvBasedClientFactory:
