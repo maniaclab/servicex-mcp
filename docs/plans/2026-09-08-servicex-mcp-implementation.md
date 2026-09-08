@@ -1042,11 +1042,63 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from mcp.server.mcpserver import MCPServer
+from servicex.dataset_identifier import (
+    CERNOpenDataDatasetIdentifier,
+    FileListDataset,
+    RucioDatasetIdentifier,
+    XRootDDatasetIdentifier,
+)
 
-from servicex_mcp.tools.submit import register
+from servicex_mcp.tools.submit import _build_dataset_identifier, register
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+
+class TestBuildDatasetIdentifier:
+    def test_rucio(self) -> None:
+        dsid = _build_dataset_identifier(
+            "mc20_13TeV:mc20_13TeV.700320.deriv.DAOD_PHYS", "rucio", None
+        )
+        assert isinstance(dsid, RucioDatasetIdentifier)
+        assert dsid.dataset == "mc20_13TeV:mc20_13TeV.700320.deriv.DAOD_PHYS"
+
+    def test_rucio_passes_num_files(self) -> None:
+        dsid = _build_dataset_identifier("ns:name", "rucio", 5)
+        assert isinstance(dsid, RucioDatasetIdentifier)
+        assert dsid.num_files == 5
+
+    def test_file_list_splits_on_comma(self) -> None:
+        dsid = _build_dataset_identifier(
+            "root://a.root,root://b.root", "file_list", None
+        )
+        assert isinstance(dsid, FileListDataset)
+        assert dsid.files == ["root://a.root", "root://b.root"]
+
+    def test_file_list_strips_whitespace_around_entries(self) -> None:
+        # A natural "a, b" list (comma + space) must not bake a leading
+        # space into the second URI — that would silently fail only that
+        # one file at transform time instead of raising here.
+        dsid = _build_dataset_identifier(
+            "root://a.root, root://b.root", "file_list", None
+        )
+        assert isinstance(dsid, FileListDataset)
+        assert dsid.files == ["root://a.root", "root://b.root"]
+
+    def test_xrootd(self) -> None:
+        dsid = _build_dataset_identifier("root://*/data*.root", "xrootd", 10)
+        assert isinstance(dsid, XRootDDatasetIdentifier)
+        assert dsid.dataset == "root://*/data*.root"
+        assert dsid.num_files == 10
+
+    def test_cernopendata(self) -> None:
+        dsid = _build_dataset_identifier("12345", "cernopendata", None)
+        assert isinstance(dsid, CERNOpenDataDatasetIdentifier)
+        assert dsid.dataset == "12345"
+
+    def test_unknown_kind_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="Unknown dataset_kind"):
+            _build_dataset_identifier("x", "not-a-kind", None)
 
 
 @pytest.fixture
@@ -1091,6 +1143,22 @@ class TestServicexSubmitQuery:
         )
         assert result.startswith("Error:")
 
+    async def test_rejects_unknown_result_format(
+        self,
+        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        mock_ctx: MagicMock,
+    ) -> None:
+        fn = registered_tools["servicex_submit_query"]
+        result = await fn(
+            dataset="ns:name",
+            dataset_kind="rucio",
+            query="q",
+            codegen="c",
+            result_format="xml",
+            ctx=mock_ctx,
+        )
+        assert result.startswith("Error:")
+
     async def test_read_only_mode_blocks_submission(
         self,
         registered_tools: dict[str, Callable[..., Awaitable[str]]],
@@ -1098,7 +1166,11 @@ class TestServicexSubmitQuery:
     ) -> None:
         fn = registered_tools["servicex_submit_query"]
         result = await fn(
-            dataset="x", dataset_kind="rucio", query="q", codegen="c", ctx=mock_ctx_readonly
+            dataset="x",
+            dataset_kind="rucio",
+            query="q",
+            codegen="c",
+            ctx=mock_ctx_readonly,
         )
         assert "read-only" in result.lower()
 
@@ -1141,9 +1213,15 @@ from servicex.dataset_identifier import (
 )
 from servicex.models import ResultFormat
 
-from servicex_mcp.tools._helpers import build_hints, check_write_allowed, classify_error, get_servicex_client
+from servicex_mcp.tools._helpers import (
+    build_hints,
+    check_write_allowed,
+    classify_error,
+    get_servicex_client,
+)
 
 DatasetKind = Literal["rucio", "file_list", "xrootd", "cernopendata"]
+ResultFormatName = Literal["parquet", "root-file", "root-rntuple"]
 
 
 def _build_dataset_identifier(
@@ -1152,7 +1230,11 @@ def _build_dataset_identifier(
     if dataset_kind == "rucio":
         return RucioDatasetIdentifier(dataset, num_files=num_files)
     if dataset_kind == "file_list":
-        return FileListDataset(dataset.split(","))
+        # Strip whitespace around each URI: an LLM naturally formats a list
+        # as "a, b" (comma + space); an un-stripped leading space becomes
+        # part of the file URI and silently fails only that one file at
+        # transform time (files_failed), not at submission.
+        return FileListDataset([f.strip() for f in dataset.split(",")])
     if dataset_kind == "xrootd":
         return XRootDDatasetIdentifier(dataset, num_files=num_files)
     if dataset_kind == "cernopendata":
@@ -1174,7 +1256,7 @@ def register(mcp: MCPServer) -> None:
         query: str,
         codegen: str,
         title: str = "ServiceX MCP Query",
-        result_format: str = "parquet",
+        result_format: ResultFormatName = "parquet",
         num_files: int | None = None,
         *,
         ctx: Context[Any, Any],
@@ -1190,6 +1272,9 @@ def register(mcp: MCPServer) -> None:
         `query` is the raw query string for the chosen `codegen` (e.g. a
         func_adl selection string, or a JSON uproot-raw spec). Use
         `servicex_list_code_generators` to see valid codegen names first.
+
+        `result_format` is one of "parquet" (default), "root-file", or
+        "root-rntuple".
 
         Returns the transform's request_id immediately — submission does
         not wait for the transform to finish. Poll progress with
@@ -1207,6 +1292,9 @@ def register(mcp: MCPServer) -> None:
 
         try:
             client = get_servicex_client(ctx)
+            # generic_query only builds a Query object (no I/O) — it is a
+            # plain sync method, not a facade over asyncio.run(...), so it
+            # is safe to call directly here.
             q = client.generic_query(
                 dataset_identifier=dsid,
                 query=query,
@@ -1214,12 +1302,20 @@ def register(mcp: MCPServer) -> None:
                 title=title,
                 result_format=fmt,
             )
+            # submit_transform is a genuinely async method on ServiceXAdapter
+            # (it awaits an httpx call internally) — await it directly rather
+            # than wrapping in asyncio.to_thread.
             request_id = await q.servicex.submit_transform(q.transform_request)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
 
         hints = build_hints(
-            [f"Use `servicex_get_transform_status` with request_id={request_id!r} to check progress"]
+            [
+                (
+                    f"Use `servicex_get_transform_status` with "
+                    f"request_id={request_id!r} to check progress"
+                )
+            ]
         )
         return f"Submitted transform. **request_id:** {request_id}" + hints
 ```

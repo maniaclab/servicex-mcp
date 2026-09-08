@@ -22,6 +22,7 @@ from servicex_mcp.tools._helpers import (
 )
 
 DatasetKind = Literal["rucio", "file_list", "xrootd", "cernopendata"]
+ResultFormatName = Literal["parquet", "root-file", "root-rntuple"]
 
 
 def _build_dataset_identifier(
@@ -30,7 +31,11 @@ def _build_dataset_identifier(
     if dataset_kind == "rucio":
         return RucioDatasetIdentifier(dataset, num_files=num_files)
     if dataset_kind == "file_list":
-        return FileListDataset(dataset.split(","))
+        # Strip whitespace around each URI: an LLM naturally formats a list
+        # as "a, b" (comma + space); an un-stripped leading space becomes
+        # part of the file URI and silently fails only that one file at
+        # transform time (files_failed), not at submission.
+        return FileListDataset([f.strip() for f in dataset.split(",")])
     if dataset_kind == "xrootd":
         return XRootDDatasetIdentifier(dataset, num_files=num_files)
     if dataset_kind == "cernopendata":
@@ -52,7 +57,7 @@ def register(mcp: MCPServer) -> None:
         query: str,
         codegen: str,
         title: str = "ServiceX MCP Query",
-        result_format: str = "parquet",
+        result_format: ResultFormatName = "parquet",
         num_files: int | None = None,
         *,
         ctx: Context[Any, Any],
@@ -68,6 +73,9 @@ def register(mcp: MCPServer) -> None:
         `query` is the raw query string for the chosen `codegen` (e.g. a
         func_adl selection string, or a JSON uproot-raw spec). Use
         `servicex_list_code_generators` to see valid codegen names first.
+
+        `result_format` is one of "parquet" (default), "root-file", or
+        "root-rntuple".
 
         Returns the transform's request_id immediately — submission does
         not wait for the transform to finish. Poll progress with
