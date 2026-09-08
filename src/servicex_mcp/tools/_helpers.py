@@ -6,7 +6,7 @@ import itertools
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from servicex import ServiceXClient
+    from servicex.servicex_client import ServiceXClient
 
 
 def human_bytes(n: float | None) -> str:
