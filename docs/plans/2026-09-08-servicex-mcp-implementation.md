@@ -1,33 +1,63 @@
 # servicex-mcp Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task (or superpowers:subagent-driven-development if executing in this session).
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to
+> implement this plan task-by-task (or superpowers:subagent-driven-development
+> if executing in this session).
 
-**Goal:** Build servicex-mcp — an MCP server wrapping the `servicex` PyPI package (`ServiceXClient`/`ServiceXAdapter`) — with both stdio and HTTP (CIMD OAuth, no DCR) transports, following the design in `docs/plans/2026-09-08-servicex-mcp-design.md`.
+**Goal:** Build servicex-mcp — an MCP server wrapping the `servicex` PyPI
+package (`ServiceXClient`/`ServiceXAdapter`) — with both stdio and HTTP (CIMD
+OAuth, no DCR) transports, following the design in
+`docs/plans/2026-09-08-servicex-mcp-design.md`.
 
-**Architecture:** Mirrors rucio-mcp/ami-mcp's package shape (`src/servicex_mcp/{cli,server,auth/*,tools/*}`, hatchling+hatch-vcs, pixi, pytest). Stdio builds one `ServiceXClient` from a local `.servicex`/`servicex.yaml`. HTTP mode is its own OAuth 2.1 AS (CIMD client identification, DCR disabled) whose `/bridge` interstitial is a synchronous "paste your ServiceX personal refresh token" form (no external IdP redirect/polling needed, unlike rucio) — the pasted refresh token is validated once, then returned verbatim as the MCP `access_token`, exactly as rucio-mcp passes through its rucio session token. Every tool gets its client via a `ServiceXClientFactory` ABC (`EnvBasedClientFactory` for stdio, `BearerTokenClientFactory` for HTTP), following the "Explicit inheritance over duck typing" rule in `~/.claude/CLAUDE.md`.
+**Architecture:** Mirrors rucio-mcp/ami-mcp's package shape
+(`src/servicex_mcp/{cli,server,auth/*,tools/*}`, hatchling+hatch-vcs, pixi,
+pytest). Stdio builds one `ServiceXClient` from a local
+`.servicex`/`servicex.yaml`. HTTP mode is its own OAuth 2.1 AS (CIMD client
+identification, DCR disabled) whose `/bridge` interstitial is a synchronous
+"paste your ServiceX personal refresh token" form (no external IdP
+redirect/polling needed, unlike rucio) — the pasted refresh token is validated
+once, then returned verbatim as the MCP `access_token`, exactly as rucio-mcp
+passes through its rucio session token. Every tool gets its client via a
+`ServiceXClientFactory` ABC (`EnvBasedClientFactory` for stdio,
+`BearerTokenClientFactory` for HTTP), following the "Explicit inheritance over
+duck typing" rule in `~/.claude/CLAUDE.md`.
 
-**Tech Stack:** Python ≥3.10, `mcp` SDK (`mcp.server.mcpserver.MCPServer`/`Context`), `servicex` PyPI package, `starlette`/`uvicorn` for HTTP, `httpx2` for CIMD fetches, `pytest`/`pytest-asyncio`, `hatchling`+`hatch-vcs`, `pixi`, `ruff`/`mypy`/`pylint` via pre-commit.
+**Tech Stack:** Python ≥3.10, `mcp` SDK
+(`mcp.server.mcpserver.MCPServer`/`Context`), `servicex` PyPI package,
+`starlette`/`uvicorn` for HTTP, `httpx2` for CIMD fetches,
+`pytest`/`pytest-asyncio`, `hatchling`+`hatch-vcs`, `pixi`,
+`ruff`/`mypy`/`pylint` via pre-commit.
 
-**Key reference files** (read-only, for copying patterns — never import from these):
-- `/Users/kratsg/rucio-mcp/` — full reference implementation (OAuth bridge, CIMD, session cache, tool/test patterns)
-- `/private/tmp/svx_check/extracted/servicex/` — unzipped `servicex` 3.3.1 wheel (the actual backend library: `servicex_client.py`, `servicex_adapter.py`, `configuration.py`, `models.py`, `dataset_identifier.py`)
+**Key reference files** (read-only, for copying patterns — never import from
+these):
+
+- `/Users/kratsg/rucio-mcp/` — full reference implementation (OAuth bridge,
+  CIMD, session cache, tool/test patterns)
+- `/private/tmp/svx_check/extracted/servicex/` — unzipped `servicex` 3.3.1 wheel
+  (the actual backend library: `servicex_client.py`, `servicex_adapter.py`,
+  `configuration.py`, `models.py`, `dataset_identifier.py`)
 
 ---
 
 ## Task 0: Project scaffolding
 
 **Files:**
-- Create: `pyproject.toml`, `pixi.toml`, `LICENSE`, `.gitignore`, `README.md`, `.pre-commit-config.yaml`
+
+- Create: `pyproject.toml`, `pixi.toml`, `LICENSE`, `.gitignore`, `README.md`,
+  `.pre-commit-config.yaml`
 - Create: `src/servicex_mcp/__init__.py`, `src/servicex_mcp/py.typed`
-- Create: `tests/__init__.py` (empty, if needed by pytest config — check rucio-mcp doesn't have one; skip if so)
+- Create: `tests/__init__.py` (empty, if needed by pytest config — check
+  rucio-mcp doesn't have one; skip if so)
 
 **Step 1: Copy and adapt `.gitignore`**
 
-Copy `/Users/kratsg/rucio-mcp/.gitignore` verbatim to `/Users/kratsg/servicex-mcp/.gitignore` (it's project-agnostic).
+Copy `/Users/kratsg/rucio-mcp/.gitignore` verbatim to
+`/Users/kratsg/servicex-mcp/.gitignore` (it's project-agnostic).
 
 **Step 2: Write `LICENSE`**
 
-Copy `/Users/kratsg/rucio-mcp/LICENSE` verbatim (same author/copyright holder, same Apache-2.0 license — confirm year is current, `2026`).
+Copy `/Users/kratsg/rucio-mcp/LICENSE` verbatim (same author/copyright holder,
+same Apache-2.0 license — confirm year is current, `2026`).
 
 **Step 3: Write `pyproject.toml`**
 
@@ -173,16 +203,26 @@ messages_control.disable = [
 **Step 4: Write `pixi.toml`**
 
 Copy `/Users/kratsg/rucio-mcp/pixi.toml` and adapt:
+
 - `name = "servicex-mcp"` everywhere (workspace name, `[package]` name)
-- `[dependencies]` → `servicex-mcp = { path = "./" }` (drop the `af-credentials` line — no broker mode yet)
+- `[dependencies]` → `servicex-mcp = { path = "./" }` (drop the `af-credentials`
+  line — no broker mode yet)
 - `[exclude-newer]` block → remove (was only for af-credentials)
-- `[package.run-dependencies]` → `servicex = ">=3.3.0"`, `mcp = ">=2.0.0,<3"`, `httpx2 = ">=2.0.0"` (drop `rich`, `rucio-clients`, `prometheus_client`, `ca-policy-lcg`, `voms`, `voms-lsc` — no VOMS/grid-cert dependency for ServiceX)
-- Drop the `[feature.helm]` `helm-lint`/`helm-template` `--set auth.mode=broker` args (no broker mode yet) — keep a plain `helm template s charts/servicex-mcp --set ingress.host=servicex-mcp.example.com`
-- Keep `[feature.test]`, `[feature.docs]`, `[feature.dev]`, `[environments]`, `[tasks]` sections structurally identical (same task names: `test`, `test-cov`, `test-slow`, `test-all`, `lint`, `check`, `build`, etc.)
+- `[package.run-dependencies]` → `servicex = ">=3.3.0"`, `mcp = ">=2.0.0,<3"`,
+  `httpx2 = ">=2.0.0"` (drop `rich`, `rucio-clients`, `prometheus_client`,
+  `ca-policy-lcg`, `voms`, `voms-lsc` — no VOMS/grid-cert dependency for
+  ServiceX)
+- Drop the `[feature.helm]` `helm-lint`/`helm-template` `--set auth.mode=broker`
+  args (no broker mode yet) — keep a plain
+  `helm template s charts/servicex-mcp --set ingress.host=servicex-mcp.example.com`
+- Keep `[feature.test]`, `[feature.docs]`, `[feature.dev]`, `[environments]`,
+  `[tasks]` sections structurally identical (same task names: `test`,
+  `test-cov`, `test-slow`, `test-all`, `lint`, `check`, `build`, etc.)
 
 **Step 5: Write `.pre-commit-config.yaml`**
 
-Copy `/Users/kratsg/rucio-mcp/.pre-commit-config.yaml` verbatim — it is project-agnostic (same hook repos/revs).
+Copy `/Users/kratsg/rucio-mcp/.pre-commit-config.yaml` verbatim — it is
+project-agnostic (same hook repos/revs).
 
 **Step 6: Write `src/servicex_mcp/__init__.py`**
 
@@ -203,7 +243,7 @@ __all__ = ["__version__"]
 
 **Step 8: Write a minimal `README.md`**
 
-```markdown
+````markdown
 # servicex-mcp
 
 MCP Server for [ServiceX](https://github.com/ssl-hep/ServiceX), the IRIS-HEP
@@ -215,6 +255,7 @@ on-demand data-delivery service for ATLAS/CMS. Wraps the
 ```bash
 pip install servicex-mcp
 ```
+````
 
 ## Usage (stdio)
 
@@ -223,22 +264,25 @@ servicex-mcp serve --backend <name-from-your-.servicex-file>
 ```
 
 See `docs/plans/` for the design and implementation plan.
-```
+
+````
 
 **Step 9: Commit**
 
 ```bash
 git add pyproject.toml pixi.toml LICENSE .gitignore .pre-commit-config.yaml README.md src/servicex_mcp/__init__.py src/servicex_mcp/py.typed
 git commit -m "chore: scaffold servicex-mcp package"
-```
+````
 
-Do **not** run `pixi install` / `git add` on `pixi.lock` yet — that happens naturally once dependencies resolve in Task 1's test run.
+Do **not** run `pixi install` / `git add` on `pixi.lock` yet — that happens
+naturally once dependencies resolve in Task 1's test run.
 
 ---
 
 ## Task 1: `auth/factory.py` — client factory ABC + stdio factory
 
 **Files:**
+
 - Create: `src/servicex_mcp/auth/__init__.py` (empty)
 - Create: `src/servicex_mcp/auth/factory.py`
 - Test: `tests/auth/__init__.py` (empty)
@@ -274,8 +318,8 @@ class TestEnvBasedClientFactory:
 
 **Step 2: Run test to verify it fails**
 
-Run: `pixi run -e py312 pytest tests/auth/test_factory.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'servicex_mcp.auth'`
+Run: `pixi run -e py312 pytest tests/auth/test_factory.py -v` Expected: FAIL —
+`ModuleNotFoundError: No module named 'servicex_mcp.auth'`
 
 **Step 3: Write minimal implementation**
 
@@ -320,8 +364,8 @@ class EnvBasedClientFactory(ServiceXClientFactory):
 
 **Step 4: Run test to verify it passes**
 
-Run: `pixi run -e py312 pytest tests/auth/test_factory.py -v`
-Expected: PASS (3 tests)
+Run: `pixi run -e py312 pytest tests/auth/test_factory.py -v` Expected: PASS (3
+tests)
 
 **Step 5: Commit**
 
@@ -335,13 +379,24 @@ git commit -m "feat: add ServiceXClientFactory ABC and stdio EnvBasedClientFacto
 ## Task 2: `tools/_helpers.py` — shared tool helpers
 
 **Files:**
+
 - Create: `src/servicex_mcp/tools/__init__.py` (empty)
 - Create: `src/servicex_mcp/tools/_helpers.py`
 - Test: `tests/test_helpers.py`
 
-Port `human_bytes`, `paginate_iter`, `build_hints`, `format_dict`, `format_list`, `_format_markdown_table` from `/Users/kratsg/rucio-mcp/src/rucio_mcp/tools/_helpers.py` **verbatim** (they are domain-agnostic — no rucio-specific logic). Replace `get_rucio_client` with `get_servicex_client` (below). Skip `parse_did` (rucio-specific, not needed). Skip `RULE_LIST_KEYS` (rucio-specific).
+Port `human_bytes`, `paginate_iter`, `build_hints`, `format_dict`,
+`format_list`, `_format_markdown_table` from
+`/Users/kratsg/rucio-mcp/src/rucio_mcp/tools/_helpers.py` **verbatim** (they are
+domain-agnostic — no rucio-specific logic). Replace `get_rucio_client` with
+`get_servicex_client` (below). Skip `parse_did` (rucio-specific, not needed).
+Skip `RULE_LIST_KEYS` (rucio-specific).
 
-**Step 1: Write the failing test** — port the equivalent assertions from `/Users/kratsg/rucio-mcp/tests/test_helpers.py` (read that file first for the exact test cases: `human_bytes` edge cases including `None`/negative/zero, `paginate_iter` under/over limit, `build_hints` empty/non-empty, `format_dict`/`format_list` table vs bullet fallback, byte-key humanization), plus:
+**Step 1: Write the failing test** — port the equivalent assertions from
+`/Users/kratsg/rucio-mcp/tests/test_helpers.py` (read that file first for the
+exact test cases: `human_bytes` edge cases including `None`/negative/zero,
+`paginate_iter` under/over limit, `build_hints` empty/non-empty,
+`format_dict`/`format_list` table vs bullet fallback, byte-key humanization),
+plus:
 
 ```python
 def test_get_servicex_client_reads_lifespan_context() -> None:
@@ -363,7 +418,10 @@ def test_get_servicex_client_reads_lifespan_context() -> None:
 
 **Step 3: Write minimal implementation**
 
-Copy `_helpers.py` from rucio-mcp, remove the `parse_did`/rucio-exception imports and `RULE_LIST_KEYS`, remove the `TOOL_ERRORS`/`current_tool_labels` metrics import (no Prometheus metrics module in v1 — plain `classify_error` without the `.inc()` calls; see below), and add:
+Copy `_helpers.py` from rucio-mcp, remove the `parse_did`/rucio-exception
+imports and `RULE_LIST_KEYS`, remove the `TOOL_ERRORS`/`current_tool_labels`
+metrics import (no Prometheus metrics module in v1 — plain `classify_error`
+without the `.inc()` calls; see below), and add:
 
 ```python
 def get_servicex_client(ctx: Any) -> ServiceXClient:
@@ -373,9 +431,13 @@ def get_servicex_client(ctx: Any) -> ServiceXClient:
     return client
 ```
 
-(add `from servicex import ServiceXClient` under a `TYPE_CHECKING` guard at the top of the module — every future tool calls this, so it should carry a real return type rather than `Any` for mypy strict to catch mistakes on the resulting client's method calls.)
+(add `from servicex import ServiceXClient` under a `TYPE_CHECKING` guard at the
+top of the module — every future tool calls this, so it should carry a real
+return type rather than `Any` for mypy strict to catch mistakes on the resulting
+client's method calls.)
 
-Rewrite `classify_error` for ServiceX exception types (no metrics call — v1 has no Prometheus wiring):
+Rewrite `classify_error` for ServiceX exception types (no metrics call — v1 has
+no Prometheus wiring):
 
 ```python
 def classify_error(exc: Exception) -> str:
@@ -436,7 +498,8 @@ def check_write_allowed(lifespan_context: dict[str, Any]) -> str | None:
     return None
 ```
 
-Keep the `_DEFAULT_BYTE_KEYS` set but scope it to ServiceX's actual byte-valued fields: `frozenset({"size", "file_size", "total_bytes"})`.
+Keep the `_DEFAULT_BYTE_KEYS` set but scope it to ServiceX's actual byte-valued
+fields: `frozenset({"size", "file_size", "total_bytes"})`.
 
 **Step 4: Run test to verify it passes.**
 
@@ -452,9 +515,11 @@ git commit -m "feat: add shared tool helpers (formatting, pagination, error clas
 ## Task 3: `tools/info.py` — server info + code generators
 
 **Files:**
+
 - Create: `src/servicex_mcp/tools/info.py`
 - Test: `tests/test_tools_info.py`
-- Modify: `tests/conftest.py` (create if not yet present — see Task 3a below, do this **first** if not already done)
+- Modify: `tests/conftest.py` (create if not yet present — see Task 3a below, do
+  this **first** if not already done)
 
 ### Task 3a (prerequisite): `tests/conftest.py`
 
@@ -513,13 +578,18 @@ def pytest_collection_modifyitems(config: Any, items: Any) -> None:
                 item.add_marker(skip_slow)
 ```
 
-No `RUCIO_CONFIG`-equivalent env fixture is needed — `ServiceXClient` methods on the mock never touch real config.
+No `RUCIO_CONFIG`-equivalent env fixture is needed — `ServiceXClient` methods on
+the mock never touch real config.
 
-**Step 2:** Commit alongside Task 3's first commit (conftest has no tests of its own to fail/pass against).
+**Step 2:** Commit alongside Task 3's first commit (conftest has no tests of its
+own to fail/pass against).
 
 ### Task 3: `tools/info.py`
 
-Note the real `ServiceXClient` has no single "info" method — `get_code_generators()` is the only info-ish call on the client itself (`get_servicex_info`/capabilities live on the lower-level adapter, `client.servicex.get_servicex_info()`). Expose both.
+Note the real `ServiceXClient` has no single "info" method —
+`get_code_generators()` is the only info-ish call on the client itself
+(`get_servicex_info`/capabilities live on the lower-level adapter,
+`client.servicex.get_servicex_info()`). Expose both.
 
 **Step 1: Write the failing test**
 
@@ -554,7 +624,9 @@ class TestServicexInfo:
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
     ) -> None:
-        info = MagicMock(app_version="3.1.0", capabilities=["poll_local_transformation_results"])
+        info = MagicMock(
+            app_version="3.1.0", capabilities=["poll_local_transformation_results"]
+        )
         mock_servicex_client.servicex.get_servicex_info = MagicMock(
             return_value=_async_return(info)
         )
@@ -613,7 +685,8 @@ def _async_return(value: object) -> object:
     return _coro()
 ```
 
-**Step 2: Run to verify it fails** — `ModuleNotFoundError: No module named 'servicex_mcp.tools.info'`.
+**Step 2: Run to verify it fails** —
+`ModuleNotFoundError: No module named 'servicex_mcp.tools.info'`.
 
 **Step 3: Write minimal implementation**
 
@@ -654,7 +727,9 @@ def register(mcp: MCPServer) -> None:
             f"- **app_version:** {info.app_version}",
             f"- **capabilities:** {', '.join(info.capabilities) or '(none)'}",
         ]
-        hints = build_hints(["Use `servicex_list_code_generators` to see available codegens"])
+        hints = build_hints(
+            ["Use `servicex_list_code_generators` to see available codegens"]
+        )
         return "\n".join(lines) + hints
 
     @mcp.tool()
@@ -677,7 +752,9 @@ def register(mcp: MCPServer) -> None:
         return format_dict(generators) + hints
 ```
 
-(This is what was actually implemented and committed for Task 3 — corrected here to match, after code review moved client acquisition inside the `try` and switched to `format_dict` for the plain-dict codegen output.)
+(This is what was actually implemented and committed for Task 3 — corrected here
+to match, after code review moved client acquisition inside the `try` and
+switched to `format_dict` for the plain-dict codegen output.)
 
 **Step 4: Run test to verify it passes.**
 
@@ -693,17 +770,42 @@ git commit -m "feat: add servicex_info and servicex_list_code_generators tools"
 ## Task 4: `tools/transforms.py` — list/get/cancel/delete transforms
 
 **Files:**
+
 - Create: `src/servicex_mcp/tools/transforms.py`
 - Test: `tests/test_tools_transforms.py`
 
-Client methods used (all on `ServiceXClient`, async, wrapped by `make_sync` on the real client but our tool code calls the `_async` variants directly since MCP tools are already async): `get_transforms_async() -> list[TransformStatus]`, `get_transform_status_async(transform_id) -> TransformStatus`, `cancel_transform(transform_id)` (sync-wrapped via `_async_execute_and_wait`, no async variant exposed — call as a blocking call inside the async tool function is acceptable here since it's a lightweight HTTP round-trip; if this proves an issue in review, wrap with `asyncio.to_thread`), `delete_transform(transform_id)`.
+Client methods used (all on `ServiceXClient`, async, wrapped by `make_sync` on
+the real client but our tool code calls the `_async` variants directly since MCP
+tools are already async): `get_transforms_async() -> list[TransformStatus]`,
+`get_transform_status_async(transform_id) -> TransformStatus`,
+`cancel_transform(transform_id)` (sync-wrapped via `_async_execute_and_wait`, no
+async variant exposed — call as a blocking call inside the async tool function
+is acceptable here since it's a lightweight HTTP round-trip; if this proves an
+issue in review, wrap with `asyncio.to_thread`),
+`delete_transform(transform_id)`.
 
-`TransformStatus` fields to surface (see `servicex/models.py`): `request_id`, `title`, `status` (enum, use `.value`), `files`, `files_completed`, `files_failed`, `files_remaining`, `submit_time`, `finish_time`, `result_format` (enum `.value`), `log_url`.
+`TransformStatus` fields to surface (see `servicex/models.py`): `request_id`,
+`title`, `status` (enum, use `.value`), `files`, `files_completed`,
+`files_failed`, `files_remaining`, `submit_time`, `finish_time`, `result_format`
+(enum `.value`), `log_url`.
 
-**Step 1: Write the failing test** (follow the `ping.py`/`test_tools_ping.py` pattern from rucio-mcp: one `registered_tools` fixture building `MCPServer("test")` + `register(mcp)`, one test class per tool, a happy-path test asserting key fields appear in the output, and an error-path test asserting `result.startswith("Error:")`). Cover:
-- `servicex_list_transforms`: returns a table when `get_transforms_async` returns a list of `TransformStatus`-shaped mocks (use `MagicMock(request_id=..., title=..., status=MagicMock(value="Complete"), ...)` or build real `servicex.models.TransformStatus` instances — prefer real model instances so field-name typos are caught); empty list → "No transforms found." message; pagination via `limit`/`offset`.
-- `servicex_get_transform_status`: happy path + "not found" (`ValueError` from the adapter) → error path.
-- `servicex_cancel_transform`: happy path; **read-only mode blocks it** (assert `check_write_allowed` gate — use `mock_ctx_readonly`, assert result equals the read-only error string).
+**Step 1: Write the failing test** (follow the `ping.py`/`test_tools_ping.py`
+pattern from rucio-mcp: one `registered_tools` fixture building
+`MCPServer("test")` + `register(mcp)`, one test class per tool, a happy-path
+test asserting key fields appear in the output, and an error-path test asserting
+`result.startswith("Error:")`). Cover:
+
+- `servicex_list_transforms`: returns a table when `get_transforms_async`
+  returns a list of `TransformStatus`-shaped mocks (use
+  `MagicMock(request_id=..., title=..., status=MagicMock(value="Complete"), ...)`
+  or build real `servicex.models.TransformStatus` instances — prefer real model
+  instances so field-name typos are caught); empty list → "No transforms found."
+  message; pagination via `limit`/`offset`.
+- `servicex_get_transform_status`: happy path + "not found" (`ValueError` from
+  the adapter) → error path.
+- `servicex_cancel_transform`: happy path; **read-only mode blocks it** (assert
+  `check_write_allowed` gate — use `mock_ctx_readonly`, assert result equals the
+  read-only error string).
 - `servicex_delete_transform`: same read-only gating test.
 
 **Step 2: Run to verify it fails.**
@@ -847,7 +949,17 @@ def register(mcp: MCPServer) -> None:
         return f"Transform {transform_id} deleted."
 ```
 
-Note: `client = get_servicex_client(ctx)` is deliberately called **inside** the `try` block in every tool (not before it) — once `BearerTokenClientFactory` (Task 13) lands, `get_client` can raise on a missing/malformed bearer token, and that failure should route through `classify_error` like any other client-side error, not propagate as an unhandled exception. Apply this ordering in every tool module from here on (Tasks 5, 6, and onward), even though the current `EnvBasedClientFactory.get_client` is a plain dict lookup that can't raise. Likewise, prefer `format_dict`/`format_list` over hand-rolled `f"- **{k}:** {v}"` loops wherever the data is already a plain dict — `info.py` (Task 3) was corrected to follow both of these after code review; don't reintroduce either pattern.
+Note: `client = get_servicex_client(ctx)` is deliberately called **inside** the
+`try` block in every tool (not before it) — once `BearerTokenClientFactory`
+(Task 13) lands, `get_client` can raise on a missing/malformed bearer token, and
+that failure should route through `classify_error` like any other client-side
+error, not propagate as an unhandled exception. Apply this ordering in every
+tool module from here on (Tasks 5, 6, and onward), even though the current
+`EnvBasedClientFactory.get_client` is a plain dict lookup that can't raise.
+Likewise, prefer `format_dict`/`format_list` over hand-rolled
+`f"- **{k}:** {v}"` loops wherever the data is already a plain dict — `info.py`
+(Task 3) was corrected to follow both of these after code review; don't
+reintroduce either pattern.
 
 **Step 4: Run test to verify it passes.**
 
@@ -863,12 +975,32 @@ git commit -m "feat: add transform inspection and management tools"
 ## Task 5: `tools/datasets.py` — list/get/delete cached datasets
 
 **Files:**
+
 - Create: `src/servicex_mcp/tools/datasets.py`
 - Test: `tests/test_tools_datasets.py`
 
-Same pattern as Task 4. Client methods: `get_datasets(did_finder=None, show_deleted=False) -> list[CachedDataset]`, `get_dataset(dataset_id) -> CachedDataset`, `delete_dataset(dataset_id) -> bool` — **all three are sync facades that internally call `_async_execute_and_wait(coro) = asyncio.run(coro)`**, not `_async`-suffixed async methods. Task 4's code-quality review caught this exact pattern on `cancel_transform`/`delete_transform`: calling a sync-over-`asyncio.run` method directly from inside an already-running async MCP tool raises `RuntimeError: asyncio.run() cannot be called from a running event loop` (verified empirically). Every call to `get_datasets`, `get_dataset`, and `delete_dataset` in this task's tools MUST be wrapped in `await asyncio.to_thread(client.get_datasets, did_finder, show_deleted)` (etc.) — never called directly. Write a test for each tool that reproduces this failure mode if the wrapping is removed (see `tests/test_tools_transforms.py`'s `_sync_facade_over_asyncio_run()` helper for the pattern: a mock `side_effect` that itself calls `asyncio.run(...)` on a trivial coroutine, so a regression is a failing test, not a silently-green suite with a MagicMock that never touches real asyncio machinery).
+Same pattern as Task 4. Client methods:
+`get_datasets(did_finder=None, show_deleted=False) -> list[CachedDataset]`,
+`get_dataset(dataset_id) -> CachedDataset`, `delete_dataset(dataset_id) -> bool`
+— **all three are sync facades that internally call
+`_async_execute_and_wait(coro) = asyncio.run(coro)`**, not `_async`-suffixed
+async methods. Task 4's code-quality review caught this exact pattern on
+`cancel_transform`/`delete_transform`: calling a sync-over-`asyncio.run` method
+directly from inside an already-running async MCP tool raises
+`RuntimeError: asyncio.run() cannot be called from a running event loop`
+(verified empirically). Every call to `get_datasets`, `get_dataset`, and
+`delete_dataset` in this task's tools MUST be wrapped in
+`await asyncio.to_thread(client.get_datasets, did_finder, show_deleted)` (etc.)
+— never called directly. Write a test for each tool that reproduces this failure
+mode if the wrapping is removed (see `tests/test_tools_transforms.py`'s
+`_sync_facade_over_asyncio_run()` helper for the pattern: a mock `side_effect`
+that itself calls `asyncio.run(...)` on a trivial coroutine, so a regression is
+a failing test, not a silently-green suite with a MagicMock that never touches
+real asyncio machinery).
 
-`CachedDataset` fields (`servicex/models.py`): `id`, `name`, `did_finder`, `n_files`, `size` (byte-key!), `events`, `last_used`, `last_updated`, `lookup_status`, `is_stale`.
+`CachedDataset` fields (`servicex/models.py`): `id`, `name`, `did_finder`,
+`n_files`, `size` (byte-key!), `events`, `last_used`, `last_updated`,
+`lookup_status`, `is_stale`.
 
 **Step 1–5:** Same TDD cycle as Task 4. Tool signatures:
 
@@ -1009,9 +1141,18 @@ def register(mcp: MCPServer) -> None:
         return f"Dataset {dataset_id} deleted (stale={stale})."
 ```
 
-Pass `byte_keys=frozenset({"size"})` to `format_list`/`format_dict` calls for datasets so `size` renders humanized (e.g. "45.47 TB") while `n_files`/`events` stay raw counts.
+Pass `byte_keys=frozenset({"size"})` to `format_list`/`format_dict` calls for
+datasets so `size` renders humanized (e.g. "45.47 TB") while `n_files`/`events`
+stay raw counts.
 
-Include a `did_not_found`-style branch check: `get_dataset`/`delete_dataset` raise `ValueError(f"Dataset {dataset_id} not found")` on 404 — verify `classify_error` routes this through the "not found" branch from Task 2 (add a dataset-specific hint there if the generic "not found" guidance doesn't read naturally — reword to "Use `servicex_list_datasets` to find valid dataset IDs" if the test wants dataset-specific wording; a `resource_hint` parameter on `classify_error` is over-engineering for this — just keep the generic wording, it already names two list tools).
+Include a `did_not_found`-style branch check: `get_dataset`/`delete_dataset`
+raise `ValueError(f"Dataset {dataset_id} not found")` on 404 — verify
+`classify_error` routes this through the "not found" branch from Task 2 (add a
+dataset-specific hint there if the generic "not found" guidance doesn't read
+naturally — reword to "Use `servicex_list_datasets` to find valid dataset IDs"
+if the test wants dataset-specific wording; a `resource_hint` parameter on
+`classify_error` is over-engineering for this — just keep the generic wording,
+it already names two list tools).
 
 Commit: `feat: add cached dataset inspection and management tools`
 
@@ -1020,15 +1161,29 @@ Commit: `feat: add cached dataset inspection and management tools`
 ## Task 6: `tools/submit.py` — submit a query (the core value-add)
 
 **Files:**
+
 - Create: `src/servicex_mcp/tools/submit.py`
 - Test: `tests/test_tools_submit.py`
 
-This is the tool that actually runs a query. Read `/private/tmp/svx_check/extracted/servicex/dataset_identifier.py` and the `generic_query`/`Query.transform_request` code in `/private/tmp/svx_check/extracted/servicex/servicex_client.py` (lines ~468-525) and `/private/tmp/svx_check/extracted/servicex/query_core.py` (lines ~129-150) before writing this — you already have them open in context from the design phase; re-read if not.
+This is the tool that actually runs a query. Read
+`/private/tmp/svx_check/extracted/servicex/dataset_identifier.py` and the
+`generic_query`/`Query.transform_request` code in
+`/private/tmp/svx_check/extracted/servicex/servicex_client.py` (lines ~468-525)
+and `/private/tmp/svx_check/extracted/servicex/query_core.py` (lines ~129-150)
+before writing this — you already have them open in context from the design
+phase; re-read if not.
 
-Key design point: **do not** use `Query.submit_and_download` / `as_files_async` (they block until the transform completes and download results — wrong shape for an MCP tool call). Instead:
+Key design point: **do not** use `Query.submit_and_download` / `as_files_async`
+(they block until the transform completes and download results — wrong shape for
+an MCP tool call). Instead:
+
 1. Build a `DataSetIdentifier` from `dataset` + `dataset_kind`.
-2. Call `client.generic_query(dataset_identifier=..., query=query, codegen=codegen, title=title, result_format=result_format)` — this returns a `Query` object **without submitting anything**.
-3. Call `await query.servicex.submit_transform(query.transform_request)` directly on the adapter — this submits and returns the `request_id` immediately, no polling/downloading.
+2. Call
+   `client.generic_query(dataset_identifier=..., query=query, codegen=codegen, title=title, result_format=result_format)`
+   — this returns a `Query` object **without submitting anything**.
+3. Call `await query.servicex.submit_transform(query.transform_request)`
+   directly on the adapter — this submits and returns the `request_id`
+   immediately, no polling/downloading.
 
 **Step 1: Write the failing test**
 
@@ -1334,6 +1489,7 @@ git commit -m "feat: add servicex_submit_query tool"
 ## Task 7: `server.py` (stdio) + `cli.py` (stdio `serve`)
 
 **Files:**
+
 - Create: `src/servicex_mcp/server.py`
 - Create: `src/servicex_mcp/cli.py`
 - Test: `tests/test_server.py`
@@ -1367,7 +1523,11 @@ class TestMakeStdioMcp:
         # a fuller assertion requires an async lifespan test — see below.
 ```
 
-Add an async test that actually enters the lifespan context manager to assert `read_only` is threaded through (follow rucio-mcp's `tests/test_server.py` for the exact pattern of entering `mcp._lifespan` via `AsyncExitStack` if that's how it tests it — read that file first for the idiom used there before writing this test).
+Add an async test that actually enters the lifespan context manager to assert
+`read_only` is threaded through (follow rucio-mcp's `tests/test_server.py` for
+the exact pattern of entering `mcp._lifespan` via `AsyncExitStack` if that's how
+it tests it — read that file first for the idiom used there before writing this
+test).
 
 **Step 2: Run to verify it fails.**
 
@@ -1400,7 +1560,10 @@ _STDIO_PREAMBLE = (
 
 
 def _make_stdio_mcp(
-    *, backend: str | None = None, config_path: str | None = None, read_only: bool = False
+    *,
+    backend: str | None = None,
+    config_path: str | None = None,
+    read_only: bool = False,
 ) -> MCPServer:
     """Build and return a configured MCPServer instance for stdio transport."""
 
@@ -1427,7 +1590,12 @@ def serve(*, backend: str | None, config_path: str | None, read_only: bool) -> N
     mcp.run(transport="stdio")
 ```
 
-Note: `_make_stdio_mcp` builds the real `ServiceXClient(backend=..., config_path=...)` eagerly inside the lifespan (not at module import time) so tests can `patch("servicex_mcp.server.ServiceXClient")` without a real `.servicex` file existing — mirror rucio-mcp's approach of constructing `Client()` inside `_lifespan`, not outside it.
+Note: `_make_stdio_mcp` builds the real
+`ServiceXClient(backend=..., config_path=...)` eagerly inside the lifespan (not
+at module import time) so tests can
+`patch("servicex_mcp.server.ServiceXClient")` without a real `.servicex` file
+existing — mirror rucio-mcp's approach of constructing `Client()` inside
+`_lifespan`, not outside it.
 
 **Step 4: Run test to verify it passes.**
 
@@ -1494,7 +1662,11 @@ def main() -> None:
             format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         )
         if args.transport == "stdio":
-            serve(backend=args.backend, config_path=args.config_path, read_only=args.read_only)
+            serve(
+                backend=args.backend,
+                config_path=args.config_path,
+                read_only=args.read_only,
+            )
         else:
             # HTTP transport is wired in Task 13 (cli http args) — placeholder
             # error until that task lands, so `--transport http` fails loudly
@@ -1506,9 +1678,15 @@ def main() -> None:
         sys.exit(0)
 ```
 
-(Task 13 replaces the `else` branch with the real HTTP wiring — leaving a loud placeholder here keeps this task's tests honest: don't assert HTTP behavior yet.)
+(Task 13 replaces the `else` branch with the real HTTP wiring — leaving a loud
+placeholder here keeps this task's tests honest: don't assert HTTP behavior
+yet.)
 
-**Step 6: Write `tests/test_cli.py`** — mirror `/Users/kratsg/rucio-mcp/tests/test_cli.py` structure: test argparse defaults, test `serve` subcommand dispatches to `servicex_mcp.server.serve` with the right kwargs (patch it), test `--help` doesn't crash. Read that file for the exact assertions/idioms used (e.g. `capsys`, `monkeypatch.setattr`).
+**Step 6: Write `tests/test_cli.py`** — mirror
+`/Users/kratsg/rucio-mcp/tests/test_cli.py` structure: test argparse defaults,
+test `serve` subcommand dispatches to `servicex_mcp.server.serve` with the right
+kwargs (patch it), test `--help` doesn't crash. Read that file for the exact
+assertions/idioms used (e.g. `capsys`, `monkeypatch.setattr`).
 
 **Step 7: Run all tests, verify pass.**
 
@@ -1519,21 +1697,31 @@ git add src/servicex_mcp/server.py src/servicex_mcp/cli.py tests/test_server.py 
 git commit -m "feat: add stdio server and CLI serve command"
 ```
 
-At this point `servicex-mcp serve` works end-to-end in stdio mode. This is a natural checkpoint — consider running `pixi run test` for the full suite before continuing to HTTP mode.
+At this point `servicex-mcp serve` works end-to-end in stdio mode. This is a
+natural checkpoint — consider running `pixi run test` for the full suite before
+continuing to HTTP mode.
 
 ---
 
 ## Task 8: `auth/session_cache.py` (HTTP mode — generic, reusable)
 
 **Files:**
+
 - Create: `src/servicex_mcp/auth/session_cache.py`
 - Test: `tests/auth/test_session_cache.py`
 
-Copy `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/session_cache.py` **verbatim** except: rename the `Client` type import/hint from `rucio.client` to `servicex.ServiceXClient` (under `TYPE_CHECKING`), and drop the rucio-specific docstring wording ("rucio Clients" → "ServiceXClient instances"). Logic is unchanged (thread-safe TTL dict, `get`/`put`/`size`/`close`).
+Copy `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/session_cache.py` **verbatim**
+except: rename the `Client` type import/hint from `rucio.client` to
+`servicex.ServiceXClient` (under `TYPE_CHECKING`), and drop the rucio-specific
+docstring wording ("rucio Clients" → "ServiceXClient instances"). Logic is
+unchanged (thread-safe TTL dict, `get`/`put`/`size`/`close`).
 
-Copy `/Users/kratsg/rucio-mcp/tests/auth/test_session_cache.py` verbatim (it only exercises TTL/threading behavior generically — check it doesn't reference `rucio.client.Client` directly; if it does, swap the mock type).
+Copy `/Users/kratsg/rucio-mcp/tests/auth/test_session_cache.py` verbatim (it
+only exercises TTL/threading behavior generically — check it doesn't reference
+`rucio.client.Client` directly; if it does, swap the mock type).
 
-TDD steps: write test (ported), run to confirm fail, write implementation (ported+renamed), run to confirm pass, commit:
+TDD steps: write test (ported), run to confirm fail, write implementation
+(ported+renamed), run to confirm pass, commit:
 
 ```bash
 git add src/servicex_mcp/auth/session_cache.py tests/auth/test_session_cache.py
@@ -1545,14 +1733,26 @@ git commit -m "feat: add SessionCache for HTTP-mode client caching"
 ## Task 9: `auth/cimd.py` (HTTP mode — generic, reusable almost verbatim)
 
 **Files:**
+
 - Create: `src/servicex_mcp/auth/cimd.py`
 - Test: `tests/auth/test_cimd.py`
 
-This module has **zero rucio-specific logic** (confirmed by reading it during design) — it's pure CIMD/OAuth client-metadata resolution. Copy `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/cimd.py` verbatim, only editing the module docstring's two mentions of "rucio-mcp" → "servicex-mcp" and the GitHub issue URL reference (drop the specific issue link, replace with a generic comment: `# Same rationale as rucio-mcp: https://github.com/kratsg/rucio-mcp/issues/33`).
+This module has **zero rucio-specific logic** (confirmed by reading it during
+design) — it's pure CIMD/OAuth client-metadata resolution. Copy
+`/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/cimd.py` verbatim, only editing the
+module docstring's two mentions of "rucio-mcp" → "servicex-mcp" and the GitHub
+issue URL reference (drop the specific issue link, replace with a generic
+comment:
+`# Same rationale as rucio-mcp: https://github.com/kratsg/rucio-mcp/issues/33`).
 
-Copy `/Users/kratsg/rucio-mcp/tests/auth/test_cimd.py` verbatim (it's also generic — exercises `is_cimd_client_id`, `redirect_uri_matches`, `assert_safe_url` SSRF guard, `fetch_client_document`, `build_client_from_document`, `resolve_cimd_client` against a fake resolver/httpx mock transport, none of it rucio-specific).
+Copy `/Users/kratsg/rucio-mcp/tests/auth/test_cimd.py` verbatim (it's also
+generic — exercises `is_cimd_client_id`, `redirect_uri_matches`,
+`assert_safe_url` SSRF guard, `fetch_client_document`,
+`build_client_from_document`, `resolve_cimd_client` against a fake
+resolver/httpx mock transport, none of it rucio-specific).
 
-TDD: write (ported) test file, confirm fail (`ModuleNotFoundError`), write (ported) implementation, confirm pass, commit:
+TDD: write (ported) test file, confirm fail (`ModuleNotFoundError`), write
+(ported) implementation, confirm pass, commit:
 
 ```bash
 git add src/servicex_mcp/auth/cimd.py tests/auth/test_cimd.py
@@ -1564,15 +1764,25 @@ git commit -m "feat: add CIMD client-metadata resolution for HTTP OAuth (no DCR)
 ## Task 10: `auth/bridge_state.py` — adapted for synchronous PAT validation
 
 **Files:**
+
 - Create: `src/servicex_mcp/auth/bridge_state.py`
 - Test: `tests/auth/test_bridge_state.py`
 
-Adapt `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/bridge_state.py`. Differences from rucio's version:
-- No `polling_url` field (there's no external IdP redirect to poll — the `/bridge` page itself is the paste-a-token form).
-- Rename `rucio_token` → `servicex_token` on `BridgeSession` and in `mark_done`'s signature/kwarg.
-- Everything else (TTL eviction, `_by_session`/`_by_code` indices, `pop_by_auth_code` single-use semantics, `mark_error`, `session_counts`) is unchanged — copy verbatim otherwise.
+Adapt `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/bridge_state.py`. Differences
+from rucio's version:
 
-**Step 1: Write the failing test** — port `/Users/kratsg/rucio-mcp/tests/auth/test_bridge_state.py` verbatim, renaming `rucio_token`→`servicex_token` and dropping any `polling_url` references/assertions.
+- No `polling_url` field (there's no external IdP redirect to poll — the
+  `/bridge` page itself is the paste-a-token form).
+- Rename `rucio_token` → `servicex_token` on `BridgeSession` and in
+  `mark_done`'s signature/kwarg.
+- Everything else (TTL eviction, `_by_session`/`_by_code` indices,
+  `pop_by_auth_code` single-use semantics, `mark_error`, `session_counts`) is
+  unchanged — copy verbatim otherwise.
+
+**Step 1: Write the failing test** — port
+`/Users/kratsg/rucio-mcp/tests/auth/test_bridge_state.py` verbatim, renaming
+`rucio_token`→`servicex_token` and dropping any `polling_url`
+references/assertions.
 
 **Step 2: Run to verify it fails.**
 
@@ -1664,7 +1874,9 @@ class BridgeStateStore:
                 return None
             return self._by_session.pop(session_id, None)
 
-    def mark_done(self, session_id: str, *, servicex_token: str, auth_code: str) -> None:
+    def mark_done(
+        self, session_id: str, *, servicex_token: str, auth_code: str
+    ) -> None:
         """Transition *session_id* to ``done`` and register the auth code index."""
         with self._lock:
             s = self._by_session.get(session_id)
@@ -1716,28 +1928,85 @@ git commit -m "feat: add BridgeStateStore for synchronous PAT-paste bridge sessi
 ## Task 11: `auth/bridge_provider.py` — `ServiceXBridgeProvider`
 
 **Files:**
+
 - Create: `src/servicex_mcp/auth/bridge_provider.py`
 - Test: `tests/auth/test_bridge_provider.py`
 
-Adapt `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/bridge_provider.py`. This is the biggest structural change from rucio-mcp:
+Adapt `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/bridge_provider.py`. This is
+the biggest structural change from rucio-mcp:
 
-- **No `BridgePoller` protocol, no `_bg_poll`, no background `asyncio.create_task`.** There is no external IdP to poll — validation of the pasted refresh token happens synchronously inside a new method, `submit_token(session_id, token) -> None`, called by the `/bridge` POST handler (Task 12).
-- `authorize()` creates the pending `BridgeSession` (no `polling_url`) and returns the `/bridge?session=...` interstitial URL directly — no poller call, no background task.
-- New method `async def submit_token(self, session_id: str, token: str) -> None`: looks up the session; if missing/expired, raise `ValueError`. Otherwise validates `token` by constructing a throwaway `ServiceXAdapter(url=self._backend_url, refresh_token=token)` and calling `await adapter._get_authorization(force_reauth=True)` inside a `try/except` — a raised `AuthorizationError` (or any exception) means invalid token → `store.mark_error(session_id, str(exc))` and re-raise (or return a bool; pick one and match the test — recommend: catch, call `store.mark_error`, then `raise` so the route handler can render "invalid token" without duplicating error text). On success: mint `auth_code = secrets.token_urlsafe(32)`, call `store.mark_done(session_id, servicex_token=token, auth_code=auth_code)`.
-  - **Why reach into `adapter._get_authorization`** (single-underscore, not name-mangled): `ServiceXAdapter` has no public "validate this token" method; `_get_authorization(force_reauth=True)` is the smallest call that actually exercises the `/token/refresh` exchange. Leave a comment explaining this — it's calling an internal method of a third-party library deliberately, which needs to be flagged in case a future `servicex` release renames it (pin `servicex>=3.3.0,<4` if this proves fragile — flag to Giordon in the PR description, don't silently add the pin yourself without asking, per the "ask before backward-compat workarounds" rule).
-- `get_client()`/`_resolve_cimd()`/`_cache_get`/`_cache_put`/`register_client()` (raises `NotImplementedError`, DCR disabled) — copy verbatim from rucio-mcp, unchanged (this part is generic OAuth/CIMD logic, not rucio-specific). **Also port the `_authorize_redirect_uri: contextvars.ContextVar[str | None]` module-level variable** from `rucio_mcp/auth/bridge_provider.py` — `get_client()`'s call to `cimd.client_with_requested_redirect(cached, _authorize_redirect_uri.get())` is dead weight without it: the contextvar is what threads the current `/authorize` request's `redirect_uri` into CIMD's port-agnostic loopback matching (Task 9's `client_with_requested_redirect`), which native MCP clients (Claude Desktop/Code binding an ephemeral loopback port per attempt) depend on to pass authorization at all. Task 14 MUST set this contextvar for the duration of each `/authorize` request — see that task's note.
-- `load_authorization_code()` / `exchange_authorization_code()` — copy structurally, rename `session.rucio_token` → `session.servicex_token`, `_jwt_expires_in(session.servicex_token)` unchanged (still decodes the JWT's `exp` claim — ServiceX refresh tokens are JWTs too).
-- `load_access_token()` — same passthrough pattern, rename `client_id="rucio-bridge"` → `client_id="servicex-bridge"`.
-- `load_refresh_token()` / `exchange_refresh_token()` / `revoke_token()` — copy verbatim (not-supported stubs).
-- Constructor: drop `poller: BridgePoller` and `poll_timeout` params; add `backend_url: str` (the ServiceX deployment URL to validate pasted tokens against). Keep `resource_url` (the servicex-mcp public URL, used for `/bridge?session=` construction) and `site_name` (drop if you don't add a metrics module in this build — no `BRIDGE_AUTH.labels(...)` calls, since there's no Prometheus module in v1; just omit those two `.inc()` lines that existed in rucio's version).
+- **No `BridgePoller` protocol, no `_bg_poll`, no background
+  `asyncio.create_task`.** There is no external IdP to poll — validation of the
+  pasted refresh token happens synchronously inside a new method,
+  `submit_token(session_id, token) -> None`, called by the `/bridge` POST
+  handler (Task 12).
+- `authorize()` creates the pending `BridgeSession` (no `polling_url`) and
+  returns the `/bridge?session=...` interstitial URL directly — no poller call,
+  no background task.
+- New method
+  `async def submit_token(self, session_id: str, token: str) -> None`: looks up
+  the session; if missing/expired, raise `ValueError`. Otherwise validates
+  `token` by constructing a throwaway
+  `ServiceXAdapter(url=self._backend_url, refresh_token=token)` and calling
+  `await adapter._get_authorization(force_reauth=True)` inside a `try/except` —
+  a raised `AuthorizationError` (or any exception) means invalid token →
+  `store.mark_error(session_id, str(exc))` and re-raise (or return a bool; pick
+  one and match the test — recommend: catch, call `store.mark_error`, then
+  `raise` so the route handler can render "invalid token" without duplicating
+  error text). On success: mint `auth_code = secrets.token_urlsafe(32)`, call
+  `store.mark_done(session_id, servicex_token=token, auth_code=auth_code)`.
+  - **Why reach into `adapter._get_authorization`** (single-underscore, not
+    name-mangled): `ServiceXAdapter` has no public "validate this token" method;
+    `_get_authorization(force_reauth=True)` is the smallest call that actually
+    exercises the `/token/refresh` exchange. Leave a comment explaining this —
+    it's calling an internal method of a third-party library deliberately, which
+    needs to be flagged in case a future `servicex` release renames it (pin
+    `servicex>=3.3.0,<4` if this proves fragile — flag to Giordon in the PR
+    description, don't silently add the pin yourself without asking, per the
+    "ask before backward-compat workarounds" rule).
+- `get_client()`/`_resolve_cimd()`/`_cache_get`/`_cache_put`/`register_client()`
+  (raises `NotImplementedError`, DCR disabled) — copy verbatim from rucio-mcp,
+  unchanged (this part is generic OAuth/CIMD logic, not rucio-specific). **Also
+  port the `_authorize_redirect_uri: contextvars.ContextVar[str | None]`
+  module-level variable** from `rucio_mcp/auth/bridge_provider.py` —
+  `get_client()`'s call to
+  `cimd.client_with_requested_redirect(cached, _authorize_redirect_uri.get())`
+  is dead weight without it: the contextvar is what threads the current
+  `/authorize` request's `redirect_uri` into CIMD's port-agnostic loopback
+  matching (Task 9's `client_with_requested_redirect`), which native MCP clients
+  (Claude Desktop/Code binding an ephemeral loopback port per attempt) depend on
+  to pass authorization at all. Task 14 MUST set this contextvar for the
+  duration of each `/authorize` request — see that task's note.
+- `load_authorization_code()` / `exchange_authorization_code()` — copy
+  structurally, rename `session.rucio_token` → `session.servicex_token`,
+  `_jwt_expires_in(session.servicex_token)` unchanged (still decodes the JWT's
+  `exp` claim — ServiceX refresh tokens are JWTs too).
+- `load_access_token()` — same passthrough pattern, rename
+  `client_id="rucio-bridge"` → `client_id="servicex-bridge"`.
+- `load_refresh_token()` / `exchange_refresh_token()` / `revoke_token()` — copy
+  verbatim (not-supported stubs).
+- Constructor: drop `poller: BridgePoller` and `poll_timeout` params; add
+  `backend_url: str` (the ServiceX deployment URL to validate pasted tokens
+  against). Keep `resource_url` (the servicex-mcp public URL, used for
+  `/bridge?session=` construction) and `site_name` (drop if you don't add a
+  metrics module in this build — no `BRIDGE_AUTH.labels(...)` calls, since
+  there's no Prometheus module in v1; just omit those two `.inc()` lines that
+  existed in rucio's version).
 
-**Step 1: Write the failing test** — port `/Users/kratsg/rucio-mcp/tests/auth/test_bridge_provider.py`, adapting:
-- Replace the mocked `BridgePoller` fixture with nothing (delete it) — instead, patch `servicex_mcp.auth.bridge_provider.ServiceXAdapter` (or whatever the module-level import name is) so `submit_token` can be tested without real network:
+**Step 1: Write the failing test** — port
+`/Users/kratsg/rucio-mcp/tests/auth/test_bridge_provider.py`, adapting:
+
+- Replace the mocked `BridgePoller` fixture with nothing (delete it) — instead,
+  patch `servicex_mcp.auth.bridge_provider.ServiceXAdapter` (or whatever the
+  module-level import name is) so `submit_token` can be tested without real
+  network:
   ```python
   async def test_submit_token_success_marks_session_done(monkeypatch, provider):
       session = _put_pending_session(provider)
       fake_adapter = MagicMock()
-      fake_adapter._get_authorization = AsyncMock(return_value={"Authorization": "Bearer x"})
+      fake_adapter._get_authorization = AsyncMock(
+          return_value={"Authorization": "Bearer x"}
+      )
       monkeypatch.setattr(
           "servicex_mcp.auth.bridge_provider.ServiceXAdapter",
           lambda *a, **k: fake_adapter,
@@ -1746,6 +2015,7 @@ Adapt `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/bridge_provider.py`. This is t
       updated = provider.store.get_by_session_id(session.session_id)
       assert updated.status == "done"
       assert updated.servicex_token == "pasted-refresh-token"
+
 
   async def test_submit_token_invalid_marks_session_error(monkeypatch, provider):
       session = _put_pending_session(provider)
@@ -1760,11 +2030,17 @@ Adapt `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/bridge_provider.py`. This is t
       updated = provider.store.get_by_session_id(session.session_id)
       assert updated.status == "error"
   ```
-- Keep the CIMD-resolution tests (`get_client` hit/miss/cache), `register_client` raising `NotImplementedError`, `load_authorization_code`/`exchange_authorization_code`/`load_access_token` tests — port these structurally unchanged (just field renames).
+- Keep the CIMD-resolution tests (`get_client` hit/miss/cache),
+  `register_client` raising `NotImplementedError`,
+  `load_authorization_code`/`exchange_authorization_code`/`load_access_token`
+  tests — port these structurally unchanged (just field renames).
 
 **Step 2: Run to verify it fails.**
 
-**Step 3: Write the implementation** following the bullet list above — write the full module now (this is the most novel piece of the whole plan; take care with imports: `from servicex.servicex_adapter import ServiceXAdapter, AuthorizationError`).
+**Step 3: Write the implementation** following the bullet list above — write the
+full module now (this is the most novel piece of the whole plan; take care with
+imports:
+`from servicex.servicex_adapter import ServiceXAdapter, AuthorizationError`).
 
 **Step 4: Run test to verify it passes.**
 
@@ -1780,10 +2056,14 @@ git commit -m "feat: add ServiceXBridgeProvider (CIMD + synchronous PAT-paste au
 ## Task 12: `auth/bridge_routes.py` — paste-a-token interstitial
 
 **Files:**
+
 - Create: `src/servicex_mcp/auth/bridge_routes.py`
 - Test: `tests/auth/test_bridge_routes.py`
 
-Adapt `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/bridge_routes.py`. Structural change: **one route, two methods** instead of two routes (`/bridge` GET renders the form; `/bridge` POST validates and redirects) — drop `/bridge/status` and the JS polling loop entirely (nothing to poll: validation is synchronous).
+Adapt `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/bridge_routes.py`. Structural
+change: **one route, two methods** instead of two routes (`/bridge` GET renders
+the form; `/bridge` POST validates and redirects) — drop `/bridge/status` and
+the JS polling loop entirely (nothing to poll: validation is synchronous).
 
 ```python
 """Starlette route handlers for the OAuth bridge interstitial page.
@@ -1895,12 +2175,18 @@ def _build_form_html(*, session_id: str, error: str | None = None) -> str:
 </html>"""
 ```
 
-**Step 1: Write the failing test** — port `/Users/kratsg/rucio-mcp/tests/auth/test_bridge_routes.py` structurally: use Starlette's `TestClient` against a minimal app mounting these two routes over a real `ServiceXBridgeProvider` with `submit_token` patched (or a fully in-memory fake `ServiceXAdapter`, per Task 11's test pattern), asserting:
+**Step 1: Write the failing test** — port
+`/Users/kratsg/rucio-mcp/tests/auth/test_bridge_routes.py` structurally: use
+Starlette's `TestClient` against a minimal app mounting these two routes over a
+real `ServiceXBridgeProvider` with `submit_token` patched (or a fully in-memory
+fake `ServiceXAdapter`, per Task 11's test pattern), asserting:
+
 - GET with no `session` param → 400
 - GET with unknown session → 404
 - GET with valid pending session → 200, form HTML contains `session_id`
 - POST with valid token → 302 redirect to `redirect_uri?code=...`
-- POST with invalid token (patched `submit_token` raises) → 400, form re-rendered with error text
+- POST with invalid token (patched `submit_token` raises) → 400, form
+  re-rendered with error text
 
 **Step 2–5:** standard TDD cycle + commit:
 
@@ -1914,10 +2200,20 @@ git commit -m "feat: add /bridge paste-token interstitial routes"
 ## Task 13: `auth/factory.py` — `BearerTokenClientFactory` + HTTP client builder
 
 **Files:**
+
 - Modify: `src/servicex_mcp/auth/factory.py`
 - Test: `tests/auth/test_factory.py` (extend)
 
-**The subtlety to handle:** `ServiceXClient.__init__` unconditionally calls `Configuration.read(config_path)`, which raises `NameError` if no `.servicex`/`servicex.yaml` file exists anywhere up the directory tree or in `$HOME` — see `/private/tmp/svx_check/extracted/servicex/configuration.py` lines 91-116 and `/private/tmp/svx_check/extracted/servicex/servicex_client.py` lines 343-391 (read both again if not already in context). HTTP mode must not require a config file to exist on the server just to build a per-request client from a URL + bearer token. So HTTP mode builds a `ServiceXClient` via `object.__new__` + manual attribute assignment instead of `ServiceXClient(url=..., ...)`, bypassing `Configuration.read()`.
+**The subtlety to handle:** `ServiceXClient.__init__` unconditionally calls
+`Configuration.read(config_path)`, which raises `NameError` if no
+`.servicex`/`servicex.yaml` file exists anywhere up the directory tree or in
+`$HOME` — see `/private/tmp/svx_check/extracted/servicex/configuration.py` lines
+91-116 and `/private/tmp/svx_check/extracted/servicex/servicex_client.py` lines
+343-391 (read both again if not already in context). HTTP mode must not require
+a config file to exist on the server just to build a per-request client from a
+URL + bearer token. So HTTP mode builds a `ServiceXClient` via
+`object.__new__` + manual attribute assignment instead of
+`ServiceXClient(url=..., ...)`, bypassing `Configuration.read()`.
 
 **Step 1: Write the failing test**
 
@@ -1940,14 +2236,18 @@ class TestBearerTokenClientFactory:
         # patch build_http_servicex_client to avoid hitting the config-bypass path
         ...
 
-    def test_caches_by_session_and_bearer_hash(self) -> None:
-        ...
+    def test_caches_by_session_and_bearer_hash(self) -> None: ...
 
-    def test_missing_bearer_raises_permission_error(self) -> None:
-        ...
+    def test_missing_bearer_raises_permission_error(self) -> None: ...
 ```
 
-Write the full set following rucio-mcp's `tests/auth/test_factory.py` `BearerTokenClientFactory` tests structurally (same cache-hit/miss/session-id-absent/bearer-mismatch cases), swapping `TokenInjectedClient`/`rucio.client.Client` mocks for `build_http_servicex_client`/`ServiceXClient` mocks. Read `/Users/kratsg/rucio-mcp/tests/auth/test_factory.py` for the exact cases before writing this.
+Write the full set following rucio-mcp's `tests/auth/test_factory.py`
+`BearerTokenClientFactory` tests structurally (same
+cache-hit/miss/session-id-absent/bearer-mismatch cases), swapping
+`TokenInjectedClient`/`rucio.client.Client` mocks for
+`build_http_servicex_client`/`ServiceXClient` mocks. Read
+`/Users/kratsg/rucio-mcp/tests/auth/test_factory.py` for the exact cases before
+writing this.
 
 **Step 2: Run to verify it fails.**
 
@@ -2015,7 +2315,9 @@ class BearerTokenClientFactory(ServiceXClientFactory):
     access token via ServiceX's own /token/refresh, lazily on first use.
     """
 
-    def __init__(self, *, cache: SessionCache, backend_url: str, cache_dir: str) -> None:
+    def __init__(
+        self, *, cache: SessionCache, backend_url: str, cache_dir: str
+    ) -> None:
         """Store the session cache, backend URL, and download cache directory."""
         self._cache = cache
         self._backend_url = backend_url
@@ -2054,35 +2356,44 @@ git commit -m "feat: add BearerTokenClientFactory and config-free HTTP client bu
 ## Task 14: `server.py` (HTTP) + `cli.py` (HTTP `serve` args)
 
 **Files:**
+
 - Modify: `src/servicex_mcp/server.py`
 - Modify: `src/servicex_mcp/cli.py`
 - Test: `tests/test_http_transport.py`
 
-**Step 1: Write the failing test** — follow `/Users/kratsg/rucio-mcp/tests/test_http_transport.py` structurally: use Starlette's `TestClient` against the app from `_make_http_app`/`_make_http_mcp`, asserting:
-- `GET /.well-known/oauth-authorization-server` (or wherever the SDK exposes AS metadata) returns 200 with `client_id_metadata_document_supported: true` (if the SDK doesn't set this automatically, check how rucio-mcp's `AuthSettings` triggers it, or whether it's asserted via a custom well-known route — read that test file first)
+**Step 1: Write the failing test** — follow
+`/Users/kratsg/rucio-mcp/tests/test_http_transport.py` structurally: use
+Starlette's `TestClient` against the app from `_make_http_app`/`_make_http_mcp`,
+asserting:
+
+- `GET /.well-known/oauth-authorization-server` (or wherever the SDK exposes AS
+  metadata) returns 200 with `client_id_metadata_document_supported: true` (if
+  the SDK doesn't set this automatically, check how rucio-mcp's `AuthSettings`
+  triggers it, or whether it's asserted via a custom well-known route — read
+  that test file first)
 - A tool call with no `Authorization` header → 401
 - `GET /bridge?session=<valid>` → 200 (reuse Task 12's fixtures)
 
 **Step 2: Run to verify it fails.**
 
 **Step 3a: Port `_AuthorizeContextMiddleware`.** Task 11 ported the
-`_authorize_redirect_uri` contextvar into `bridge_provider.py`, but nothing
-sets it without this ASGI middleware. Copy it from
+`_authorize_redirect_uri` contextvar into `bridge_provider.py`, but nothing sets
+it without this ASGI middleware. Copy it from
 `/Users/kratsg/rucio-mcp/src/rucio_mcp/server.py` (search for
 `_AuthorizeContextMiddleware`, ~30 lines) verbatim — it is generic ASGI/OAuth
-glue, not rucio-specific: for every request whose path ends in `/authorize`,
-it extracts the `redirect_uri` query parameter, sets `_authorize_redirect_uri`
-for the duration of that request, and resets it in a `finally`. Wrap the ASGI
-app this middleware decorates around whatever `mcp.streamable_http_app()` (or
+glue, not rucio-specific: for every request whose path ends in `/authorize`, it
+extracts the `redirect_uri` query parameter, sets `_authorize_redirect_uri` for
+the duration of that request, and resets it in a `finally`. Wrap the ASGI app
+this middleware decorates around whatever `mcp.streamable_http_app()` (or
 equivalent) returns, before passing it to `uvicorn.run(...)`. Without this,
 `ServiceXBridgeProvider._resolve_cimd()`'s call to
 `cimd.client_with_requested_redirect(cached, _authorize_redirect_uri.get())`
 always receives `None`, and a native MCP client's ephemeral-loopback-port
-redirect (Claude Desktop/Code) will fail `/authorize` after the first
-successful attempt pins a stale port — write a test for this (send two
-`/authorize` requests with different loopback ports for the same CIMD
-`client_id`, assert both succeed) since it's exactly the kind of gap that
-passes every other test and only breaks in real native-app usage.
+redirect (Claude Desktop/Code) will fail `/authorize` after the first successful
+attempt pins a stale port — write a test for this (send two `/authorize`
+requests with different loopback ports for the same CIMD `client_id`, assert
+both succeed) since it's exactly the kind of gap that passes every other test
+and only breaks in real native-app usage.
 
 **Step 3b: Add to `server.py`**
 
@@ -2109,11 +2420,15 @@ def _make_http_mcp(
     *, backend_url: str, resource_url: str, read_only: bool, cache_dir: str
 ) -> tuple[MCPServer, ServiceXBridgeProvider]:
     """Build the FastMCP instance for HTTP transport."""
-    provider = ServiceXBridgeProvider(backend_url=backend_url, resource_url=resource_url)
+    provider = ServiceXBridgeProvider(
+        backend_url=backend_url, resource_url=resource_url
+    )
     cache = SessionCache()
 
     @asynccontextmanager
-    async def _http_lifespan(_server: MCPServer) -> AsyncGenerator[dict[str, Any], None]:
+    async def _http_lifespan(
+        _server: MCPServer,
+    ) -> AsyncGenerator[dict[str, Any], None]:
         factory = BearerTokenClientFactory(
             cache=cache, backend_url=backend_url, cache_dir=cache_dir
         )
@@ -2144,66 +2459,82 @@ def _make_http_mcp(
 
 
 def serve_http(
-    *, backend_url: str, resource_url: str, host: str, port: int, read_only: bool, cache_dir: str
+    *,
+    backend_url: str,
+    resource_url: str,
+    host: str,
+    port: int,
+    read_only: bool,
+    cache_dir: str
 ) -> None:
     """Entry point used by the CLI's `serve --transport http` path."""
     import uvicorn
 
     mcp, _provider = _make_http_mcp(
-        backend_url=backend_url, resource_url=resource_url, read_only=read_only, cache_dir=cache_dir
+        backend_url=backend_url,
+        resource_url=resource_url,
+        read_only=read_only,
+        cache_dir=cache_dir,
     )
     uvicorn.run(mcp.streamable_http_app(), host=host, port=port)
 ```
 
-Check the exact ASGI-app accessor name (`mcp.streamable_http_app()` vs another method) against how rucio-mcp's `_make_http_app` wires uvicorn — read `/Users/kratsg/rucio-mcp/src/rucio_mcp/server.py` lines 850-1054 (the `_make_http_app` function) if the above doesn't match the installed `mcp` SDK version's API.
+Check the exact ASGI-app accessor name (`mcp.streamable_http_app()` vs another
+method) against how rucio-mcp's `_make_http_app` wires uvicorn — read
+`/Users/kratsg/rucio-mcp/src/rucio_mcp/server.py` lines 850-1054 (the
+`_make_http_app` function) if the above doesn't match the installed `mcp` SDK
+version's API.
 
 **Step 4: Run test to verify it passes.**
 
-**Step 5: Update `cli.py`** — replace the placeholder `else` branch from Task 7 with:
+**Step 5: Update `cli.py`** — replace the placeholder `else` branch from Task 7
+with:
 
 ```python
-    serve_parser.add_argument(
-        "--backend-url",
-        default=None,
-        metavar="URL",
-        help="Base URL of the ServiceX deployment (required for --transport http).",
-    )
-    serve_parser.add_argument(
-        "--resource-url",
-        default=None,
-        metavar="URL",
-        help="Public URL of this MCP server (required for --transport http).",
-    )
-    serve_parser.add_argument("--host", default="127.0.0.1")
-    serve_parser.add_argument("--port", type=int, default=8000)
-    serve_parser.add_argument(
-        "--cache-dir", default="/tmp/servicex_mcp_cache", metavar="PATH"
-    )
+serve_parser.add_argument(
+    "--backend-url",
+    default=None,
+    metavar="URL",
+    help="Base URL of the ServiceX deployment (required for --transport http).",
+)
+serve_parser.add_argument(
+    "--resource-url",
+    default=None,
+    metavar="URL",
+    help="Public URL of this MCP server (required for --transport http).",
+)
+serve_parser.add_argument("--host", default="127.0.0.1")
+serve_parser.add_argument("--port", type=int, default=8000)
+serve_parser.add_argument(
+    "--cache-dir", default="/tmp/servicex_mcp_cache", metavar="PATH"
+)
 ```
 
 and in `main()`:
 
 ```python
-        if args.transport == "stdio":
-            serve(backend=args.backend, config_path=args.config_path, read_only=args.read_only)
-        else:
-            if not args.backend_url or not args.resource_url:
-                parser.error("--transport http requires --backend-url and --resource-url")
-            from servicex_mcp.server import serve_http
+if args.transport == "stdio":
+    serve(backend=args.backend, config_path=args.config_path, read_only=args.read_only)
+else:
+    if not args.backend_url or not args.resource_url:
+        parser.error("--transport http requires --backend-url and --resource-url")
+    from servicex_mcp.server import serve_http
 
-            serve_http(
-                backend_url=args.backend_url,
-                resource_url=args.resource_url,
-                host=args.host,
-                port=args.port,
-                read_only=args.read_only,
-                cache_dir=args.cache_dir,
-            )
+    serve_http(
+        backend_url=args.backend_url,
+        resource_url=args.resource_url,
+        host=args.host,
+        port=args.port,
+        read_only=args.read_only,
+        cache_dir=args.cache_dir,
+    )
 ```
 
 **Step 6: Extend `tests/test_cli.py`** for the new args/dispatch path.
 
-**Step 7: Run full suite:** `pixi run test` (or `pytest -m 'not slow'` if pixi isn't set up yet in the sandbox) — verify everything passes together, not just per-file.
+**Step 7: Run full suite:** `pixi run test` (or `pytest -m 'not slow'` if pixi
+isn't set up yet in the sandbox) — verify everything passes together, not just
+per-file.
 
 **Step 8: Commit**
 
@@ -2217,10 +2548,12 @@ git commit -m "feat: add HTTP transport wiring (CIMD OAuth AS, bridge routes)"
 ## Task 15: Integration test stub
 
 **Files:**
+
 - Create: `tests/integration/__init__.py` (empty)
 - Create: `tests/integration/test_live.py`
 
-Write one `@pytest.mark.slow` test class, skipped by default (needs `--runslow` per `conftest.py`), documenting how to run it against a real ServiceX instance:
+Write one `@pytest.mark.slow` test class, skipped by default (needs `--runslow`
+per `conftest.py`), documenting how to run it against a real ServiceX instance:
 
 ```python
 """Integration tests against a real ServiceX instance.
@@ -2262,7 +2595,8 @@ git commit -m "test: add integration test scaffold for a live ServiceX instance"
 
 ## Task 16: Packaging polish (charts, CI/CD, docs)
 
-Do this last, once `pixi run check` (lint + test) is green on Task 14. These are mechanical adaptations of rucio-mcp's infra — no new design decisions.
+Do this last, once `pixi run check` (lint + test) is green on Task 14. These are
+mechanical adaptations of rucio-mcp's infra — no new design decisions.
 
 **16a. Helm chart**
 
@@ -2275,7 +2609,19 @@ grep -rl 'rucio-mcp\|rucio_mcp\|RUCIO_MCP\|Rucio' . | xargs sed -i '' \
   -e 's/RUCIO_MCP/SERVICEX_MCP/g' \
   -e 's/Rucio/ServiceX/g'
 ```
-Then hand-review `values.yaml`, `templates/deployment.yaml`, `templates/configmap.yaml`, and `templates/secret.yaml` — rucio-mcp's chart has `auth.mode` (oidc/x509/shared-secret/broker) and site-list values that don't map 1:1 onto servicex-mcp's two modes (stdio doesn't apply to a chart at all; HTTP mode here only has the bridge mode, no shared-secret/broker yet). Simplify `values.yaml` to just `auth: { backendUrl: "", resourceUrl: "" }` and drop the `auth.mode`/`auth.sites`/`auth.broker.*` keys and any broker-specific template blocks (`templates/secret.yaml`'s broker JWKS bits, if present). Drop `dashboards/rucio-mcp.json` and `templates/grafana-dashboard.yaml` (no Prometheus metrics module in this build — re-add once one exists). Run `helm lint charts/servicex-mcp --set ingress.host=servicex-mcp.example.com` (needs the `helm` pixi feature from Task 0) and fix anything it flags.
+
+Then hand-review `values.yaml`, `templates/deployment.yaml`,
+`templates/configmap.yaml`, and `templates/secret.yaml` — rucio-mcp's chart has
+`auth.mode` (oidc/x509/shared-secret/broker) and site-list values that don't map
+1:1 onto servicex-mcp's two modes (stdio doesn't apply to a chart at all; HTTP
+mode here only has the bridge mode, no shared-secret/broker yet). Simplify
+`values.yaml` to just `auth: { backendUrl: "", resourceUrl: "" }` and drop the
+`auth.mode`/`auth.sites`/`auth.broker.*` keys and any broker-specific template
+blocks (`templates/secret.yaml`'s broker JWKS bits, if present). Drop
+`dashboards/rucio-mcp.json` and `templates/grafana-dashboard.yaml` (no
+Prometheus metrics module in this build — re-add once one exists). Run
+`helm lint charts/servicex-mcp --set ingress.host=servicex-mcp.example.com`
+(needs the `helm` pixi feature from Task 0) and fix anything it flags.
 
 **16b. GitHub Actions**
 
@@ -2286,7 +2632,14 @@ cp /Users/kratsg/rucio-mcp/.github/{dependabot.yml,release.yml} /Users/kratsg/se
 grep -rl 'rucio-mcp\|rucio_mcp' /Users/kratsg/servicex-mcp/.github | xargs sed -i '' \
   -e 's/rucio-mcp/servicex-mcp/g' -e 's/rucio_mcp/servicex_mcp/g'
 ```
-Hand-review `ci.yml` for any rucio-specific test matrix steps (e.g. installing VOMS/grid certs for integration tests) — remove those; servicex-mcp's integration tests need `.servicex` config secrets instead, which don't exist yet (leave the integration-test CI job commented out or `if: false` until Giordon sets up real ServiceX test credentials — ask him before wiring live-credential CI, per the "ask before adding CI secrets/pipeline changes" spirit of the version-control rules).
+
+Hand-review `ci.yml` for any rucio-specific test matrix steps (e.g. installing
+VOMS/grid certs for integration tests) — remove those; servicex-mcp's
+integration tests need `.servicex` config secrets instead, which don't exist yet
+(leave the integration-test CI job commented out or `if: false` until Giordon
+sets up real ServiceX test credentials — ask him before wiring live-credential
+CI, per the "ask before adding CI secrets/pipeline changes" spirit of the
+version-control rules).
 
 **16c. Docs**
 
@@ -2294,7 +2647,12 @@ Hand-review `ci.yml` for any rucio-specific test matrix steps (e.g. installing V
 cp /Users/kratsg/rucio-mcp/zensical.toml /Users/kratsg/servicex-mcp/zensical.toml
 mkdir -p /Users/kratsg/servicex-mcp/docs
 ```
-Adapt `zensical.toml`'s site name/nav. Write a minimal `docs/index.md` (or whatever the rucio-mcp nav's landing page is called) summarizing the tool list from this plan. Full docs parity with rucio-mcp (auth flow diagrams, per-tool reference pages) is follow-up work — flag as a TODO in the PR description rather than blocking on it here.
+
+Adapt `zensical.toml`'s site name/nav. Write a minimal `docs/index.md` (or
+whatever the rucio-mcp nav's landing page is called) summarizing the tool list
+from this plan. Full docs parity with rucio-mcp (auth flow diagrams, per-tool
+reference pages) is follow-up work — flag as a TODO in the PR description rather
+than blocking on it here.
 
 **16d. Commit**
 
@@ -2307,12 +2665,19 @@ git commit -m "chore: add Helm chart, CI/CD workflows, and docs scaffold"
 
 ## Task 17: Full verification pass
 
-**Step 1:** `pixi install` (resolves and locks all deps — first time this generates `pixi.lock`)
+**Step 1:** `pixi install` (resolves and locks all deps — first time this
+generates `pixi.lock`)
 
 **Step 2:** `pixi run check` (lint + test) — fix anything red.
 
-**Step 3:** `pixi run build && pixi run build-check` — confirm the package actually builds.
+**Step 3:** `pixi run build && pixi run build-check` — confirm the package
+actually builds.
 
-**Step 4:** Review `git log --oneline` against this plan's task list — confirm nothing was skipped.
+**Step 4:** Review `git log --oneline` against this plan's task list — confirm
+nothing was skipped.
 
-**Step 5:** Report to Giordon: what's done (stdio + HTTP both working, full tool surface, tests passing), what's explicitly deferred (per the design doc: `servicex-token-service`/broker mode, Prometheus metrics, full docs parity, live-credential CI), and ask whether to open a PR now or keep building on this branch.
+**Step 5:** Report to Giordon: what's done (stdio + HTTP both working, full tool
+surface, tests passing), what's explicitly deferred (per the design doc:
+`servicex-token-service`/broker mode, Prometheus metrics, full docs parity,
+live-credential CI), and ask whether to open a PR now or keep building on this
+branch.
