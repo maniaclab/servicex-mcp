@@ -196,6 +196,7 @@ class TestCLIServe:
         assert captured["port"] == 8000
         assert captured["read_only"] is False
         assert captured["cache_dir"] == "/tmp/servicex_mcp_cache"
+        assert captured["log_level"] == "info"
 
     def test_transport_http_forwards_host_port_and_cache_dir(self) -> None:
         captured: dict[str, object] = {}

@@ -96,6 +96,7 @@ def main() -> None:
                 port=args.port,
                 read_only=args.read_only,
                 cache_dir=args.cache_dir,
+                log_level=args.log_level,
             )
     else:
         parser.print_help()

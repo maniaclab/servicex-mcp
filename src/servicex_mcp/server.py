@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 import uvicorn
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl
 from servicex.servicex_client import ServiceXClient
 
@@ -167,6 +168,35 @@ class _CimdMetadataMiddleware:
         await self._app(scope, receive, _buffer)
 
 
+def _transport_security_from_resource_url(
+    resource_url: str,
+) -> TransportSecuritySettings:
+    """Build an explicit DNS-rebinding allow-list from the server's public URL.
+
+    The MCP SDK's `streamable_http_app(host=...)` only auto-enables DNS
+    rebinding protection (and only allows 127.0.0.1/localhost/::1) when the
+    *bind* host it's given is loopback — it has no idea what public
+    `resource_url` clients actually reach the server through. Since we never
+    pass a `host=` derived from the real bind address, that auto-enable
+    branch would silently never fire for any non-loopback deployment, and
+    `TransportSecurityMiddleware` falls back to
+    `enable_dns_rebinding_protection=False` when given no explicit settings
+    at all — i.e. the failure mode isn't "server refuses to start," it's
+    "DNS rebinding protection is silently off" for a real public bind, or
+    (if a bind host happens to be loopback while resource_url isn't) the
+    server 421s every request. Building this explicitly from `resource_url`
+    is correct for both local (http://localhost:PORT) and hosted
+    (https://servicex-mcp.example.org) deployments.
+    """
+    parsed = urlparse(resource_url)
+    netloc = parsed.netloc
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[netloc],
+        allowed_origins=[f"{parsed.scheme}://{netloc}"],
+    )
+
+
 def _make_http_mcp(
     *, backend_url: str, resource_url: str, read_only: bool, cache_dir: str
 ) -> tuple[MCPServer, ServiceXBridgeProvider]:
@@ -217,6 +247,7 @@ def serve_http(
     port: int,
     read_only: bool,
     cache_dir: str,
+    log_level: str = "info",
 ) -> None:
     """Entry point used by the CLI's `serve --transport http` path."""
     mcp, _provider = _make_http_mcp(
@@ -225,7 +256,13 @@ def serve_http(
         read_only=read_only,
         cache_dir=cache_dir,
     )
-    app = _CimdMetadataMiddleware(
-        _AuthorizeContextMiddleware(mcp.streamable_http_app())
+    http_app = mcp.streamable_http_app(
+        transport_security=_transport_security_from_resource_url(resource_url)
     )
-    uvicorn.run(app, host=host, port=port)
+    app = _CimdMetadataMiddleware(_AuthorizeContextMiddleware(http_app))
+    # log_level is forwarded explicitly: uvicorn's own "uvicorn"/"uvicorn.error"/
+    # "uvicorn.access" loggers are configured with propagate=False by its
+    # default LOGGING_CONFIG, so they never inherit the level set on the root
+    # logger via logging.basicConfig() in cli.py -- without this, --log-level
+    # controls this app's own logs but not uvicorn's startup/access noise.
+    uvicorn.run(app, host=host, port=port, log_level=log_level)
