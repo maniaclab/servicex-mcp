@@ -37,6 +37,21 @@ class TestServicexInfo:
         fn = registered_tools["servicex_info"]
         result = await fn(ctx=mock_ctx)
         assert "3.1.0" in result
+        assert "poll_local_transformation_results" in result
+
+    async def test_no_capabilities_renders_none(
+        self,
+        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        mock_ctx: MagicMock,
+        mock_servicex_client: MagicMock,
+    ) -> None:
+        info = MagicMock(app_version="3.1.0", capabilities=[])
+        mock_servicex_client.servicex.get_servicex_info = MagicMock(
+            return_value=_async_return(info)
+        )
+        fn = registered_tools["servicex_info"]
+        result = await fn(ctx=mock_ctx)
+        assert "(none)" in result
 
     async def test_returns_error_on_exception(
         self,
@@ -68,6 +83,19 @@ class TestServicexListCodeGenerators:
         fn = registered_tools["servicex_list_code_generators"]
         result = await fn(ctx=mock_ctx)
         assert "uproot-raw" in result
+        assert "python" in result
+        assert "servicex_submit_query" in result
+
+    async def test_no_generators_returns_message(
+        self,
+        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        mock_ctx: MagicMock,
+        mock_servicex_client: MagicMock,
+    ) -> None:
+        mock_servicex_client.get_code_generators.return_value = {}
+        fn = registered_tools["servicex_list_code_generators"]
+        result = await fn(ctx=mock_ctx)
+        assert result == "No code generators are registered on this ServiceX instance."
 
     async def test_returns_error_on_exception(
         self,

@@ -6,11 +6,16 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer  # noqa: TC002
 
-from servicex_mcp.tools._helpers import build_hints, classify_error, get_servicex_client
+from servicex_mcp.tools._helpers import (
+    build_hints,
+    classify_error,
+    format_dict,
+    get_servicex_client,
+)
 
 
 def register(mcp: MCPServer) -> None:
-    """Register info tools with the MCP server."""
+    """Register servicex_info and servicex_list_code_generators with the MCP server."""
 
     @mcp.tool()
     async def servicex_info(*, ctx: Context[Any, Any]) -> str:
@@ -20,8 +25,8 @@ def register(mcp: MCPServer) -> None:
         which optional server capabilities are available (e.g. whether
         long sample titles or local-transform polling are supported).
         """
-        client = get_servicex_client(ctx)
         try:
+            client = get_servicex_client(ctx)
             info = await client.servicex.get_servicex_info()
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
@@ -41,15 +46,14 @@ def register(mcp: MCPServer) -> None:
         Each code generator (e.g. `func_adl_uproot`, `python`, `uproot-raw`)
         maps to a query language you can use with `servicex_submit_query`.
         """
-        client = get_servicex_client(ctx)
         try:
+            client = get_servicex_client(ctx)
             generators = client.get_code_generators()
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
         if not generators:
             return "No code generators are registered on this ServiceX instance."
-        lines = [f"- **{name}:** {image}" for name, image in generators.items()]
         hints = build_hints(
             ["Use `servicex_submit_query` with one of these codegen names"]
         )
-        return "\n".join(lines) + hints
+        return format_dict(generators) + hints

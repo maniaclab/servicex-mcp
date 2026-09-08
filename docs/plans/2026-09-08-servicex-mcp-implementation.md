@@ -626,11 +626,16 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer  # noqa: TC002
 
-from servicex_mcp.tools._helpers import build_hints, classify_error, get_servicex_client
+from servicex_mcp.tools._helpers import (
+    build_hints,
+    classify_error,
+    format_dict,
+    get_servicex_client,
+)
 
 
 def register(mcp: MCPServer) -> None:
-    """Register info tools with the MCP server."""
+    """Register servicex_info and servicex_list_code_generators with the MCP server."""
 
     @mcp.tool()
     async def servicex_info(*, ctx: Context[Any, Any]) -> str:
@@ -640,8 +645,8 @@ def register(mcp: MCPServer) -> None:
         which optional server capabilities are available (e.g. whether
         long sample titles or local-transform polling are supported).
         """
-        client = get_servicex_client(ctx)
         try:
+            client = get_servicex_client(ctx)
             info = await client.servicex.get_servicex_info()
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
@@ -659,19 +664,20 @@ def register(mcp: MCPServer) -> None:
         Each code generator (e.g. `func_adl_uproot`, `python`, `uproot-raw`)
         maps to a query language you can use with `servicex_submit_query`.
         """
-        client = get_servicex_client(ctx)
         try:
+            client = get_servicex_client(ctx)
             generators = client.get_code_generators()
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
         if not generators:
             return "No code generators are registered on this ServiceX instance."
-        lines = [f"- **{name}:** {image}" for name, image in generators.items()]
         hints = build_hints(
             ["Use `servicex_submit_query` with one of these codegen names"]
         )
-        return "\n".join(lines) + hints
+        return format_dict(generators) + hints
 ```
+
+(This is what was actually implemented and committed for Task 3 — corrected here to match, after code review moved client acquisition inside the `try` and switched to `format_dict` for the plain-dict codegen output.)
 
 **Step 4: Run test to verify it passes.**
 
@@ -717,6 +723,7 @@ from servicex_mcp.tools._helpers import (
     build_hints,
     check_write_allowed,
     classify_error,
+    format_dict,
     format_list,
     get_servicex_client,
     paginate_iter,
@@ -751,7 +758,8 @@ def _transform_to_dict(t: Any) -> dict[str, Any]:
 
 
 def register(mcp: MCPServer) -> None:
-    """Register transform tools with the MCP server."""
+    """Register servicex_list_transforms, servicex_get_transform_status,
+    servicex_cancel_transform, and servicex_delete_transform."""
 
     @mcp.tool()
     async def servicex_list_transforms(
@@ -762,8 +770,8 @@ def register(mcp: MCPServer) -> None:
         Shows status, file completion counts, and timing for each transform.
         Use `servicex_get_transform_status` for full detail on one transform.
         """
-        client = get_servicex_client(ctx)
         try:
+            client = get_servicex_client(ctx)
             transforms = await client.get_transforms_async()
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
@@ -786,21 +794,18 @@ def register(mcp: MCPServer) -> None:
         Includes the object-store/minio location details needed to fetch
         results once the transform completes.
         """
-        client = get_servicex_client(ctx)
         try:
+            client = get_servicex_client(ctx)
             t = await client.get_transform_status_async(transform_id)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
-        d = _transform_to_dict(t)
-        d["log_url"] = t.log_url
-        lines = [f"- **{k}:** {v}" for k, v in d.items() if v is not None]
         hints = build_hints(
             [
                 "Use `servicex_cancel_transform` to stop a running transform",
                 "Use `servicex_delete_transform` to remove a finished one",
             ]
         )
-        return "\n".join(lines) + hints
+        return format_dict(_transform_to_dict(t)) + hints
 
     @mcp.tool()
     async def servicex_cancel_transform(
@@ -810,8 +815,8 @@ def register(mcp: MCPServer) -> None:
         write_error = check_write_allowed(ctx.request_context.lifespan_context)
         if write_error:
             return write_error
-        client = get_servicex_client(ctx)
         try:
+            client = get_servicex_client(ctx)
             client.cancel_transform(transform_id)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
@@ -825,13 +830,15 @@ def register(mcp: MCPServer) -> None:
         write_error = check_write_allowed(ctx.request_context.lifespan_context)
         if write_error:
             return write_error
-        client = get_servicex_client(ctx)
         try:
+            client = get_servicex_client(ctx)
             client.delete_transform(transform_id)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
         return f"Transform {transform_id} deleted."
 ```
+
+Note: `client = get_servicex_client(ctx)` is deliberately called **inside** the `try` block in every tool (not before it) — once `BearerTokenClientFactory` (Task 13) lands, `get_client` can raise on a missing/malformed bearer token, and that failure should route through `classify_error` like any other client-side error, not propagate as an unhandled exception. Apply this ordering in every tool module from here on (Tasks 5, 6, and onward), even though the current `EnvBasedClientFactory.get_client` is a plain dict lookup that can't raise. Likewise, prefer `format_dict`/`format_list` over hand-rolled `f"- **{k}:** {v}"` loops wherever the data is already a plain dict — `info.py` (Task 3) was corrected to follow both of these after code review; don't reintroduce either pattern.
 
 **Step 4: Run test to verify it passes.**
 
@@ -1072,8 +1079,8 @@ def register(mcp: MCPServer) -> None:
         except ValueError as exc:
             return f"Error: {exc}"
 
-        client = get_servicex_client(ctx)
         try:
+            client = get_servicex_client(ctx)
             q = client.generic_query(
                 dataset_identifier=dsid,
                 query=query,
