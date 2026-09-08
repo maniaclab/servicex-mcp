@@ -1,0 +1,31 @@
+servicex-mcp has been deployed, talking to the ServiceX backend at:
+  {{ .Values.auth.backendUrl }}
+
+{{- if .Values.ingress.enabled }}
+
+Public URL: https://{{ .Values.ingress.host }}
+{{- else }}
+
+No ingress configured. Reach the service in-cluster:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "servicex-mcp.fullname" . }} 8080:{{ .Values.service.port }}
+  # then http://127.0.0.1:8080/
+{{- end }}
+
+Each user authenticates by pasting their own ServiceX personal refresh token
+through the /bridge interstitial the first time they connect -- no ServiceX
+credential lives in the pod. Point an MCP client at the URL above; it will
+discover the OAuth endpoints automatically.
+
+  Example MCP client config:
+    {
+      "mcpServers": {
+        "servicex": {
+          "type": "http",
+          "url": "https://{{ .Values.ingress.host }}/"
+        }
+      }
+    }
+
+Verify the rollout:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "servicex-mcp.fullname" . }}
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

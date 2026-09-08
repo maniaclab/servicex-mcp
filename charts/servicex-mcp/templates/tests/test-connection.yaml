@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "servicex-mcp.fullname" . }}-test-connection"
+  labels:
+    {{- include "servicex-mcp.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: connection
+      image: busybox:1.36
+      # servicex-mcp has no dedicated health-check endpoint yet (unlike
+      # rucio-mcp's /healthz), so this test only confirms the MCP port accepts
+      # TCP connections rather than probing an HTTP path.
+      command: ["nc", "-z", "-w", "5"]
+      args:
+        - "{{ include "servicex-mcp.fullname" . }}"
+        - "{{ .Values.service.port }}"

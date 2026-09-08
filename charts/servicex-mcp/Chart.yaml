@@ -1,0 +1,25 @@
+apiVersion: v2
+name: servicex-mcp
+description: |
+  MCP server exposing ServiceX on-demand data-delivery operations as tools for
+  LLMs, served over HTTP transport via the CIMD OAuth bridge: each user pastes
+  their own ServiceX personal refresh token through the server's /bridge
+  interstitial, so no ServiceX credential lives in the pod.
+type: application
+# Chart version, kept in lockstep with appVersion.
+version: 0.1.0
+# servicex-mcp release the chart deploys by default (placeholder until the
+# first release is published to conda-forge). Override with
+# servicexMcp.version in values.
+appVersion: "0.1.0"
+keywords:
+  - servicex
+  - mcp
+  - atlas
+  - data-delivery
+home: https://github.com/kratsg/servicex-mcp
+sources:
+  - https://github.com/kratsg/servicex-mcp
+maintainers:
+  - name: Giordon Stark
+    email: kratsg@gmail.com

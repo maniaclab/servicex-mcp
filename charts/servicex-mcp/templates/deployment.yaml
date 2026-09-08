@@ -1,0 +1,129 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "servicex-mcp.fullname" . }}
+  labels:
+    {{- include "servicex-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "servicex-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Restart pods when the rendered pixi manifest changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "servicex-mcp.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.serviceAccount.create .Values.serviceAccount.name }}
+      serviceAccountName: {{ include "servicex-mcp.serviceAccountName" . }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: pixi-install
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              cp /pixi-config/pixi.toml /workspace/pixi.toml
+              {{- if .Values.servicexMcp.pixiLockContent }}
+              cp /pixi-config/pixi.lock /workspace/pixi.lock
+              {{- end }}
+              pixi install --manifest-path /workspace/pixi.toml
+          volumeMounts:
+            - name: pixi-config
+              mountPath: /pixi-config
+            - name: workspace
+              mountPath: /workspace
+          resources:
+            {{- toYaml .Values.initResources | nindent 12 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              eval "$(pixi shell-hook --manifest-path /workspace/pixi.toml --shell bash)"
+              exec servicex-mcp serve {{ include "servicex-mcp.serveArgs" . }}
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+              protocol: TCP
+          # servicex-mcp has no dedicated health-check endpoint yet (unlike
+          # rucio-mcp's /healthz), so probes only confirm the MCP port accepts
+          # TCP connections rather than checking an HTTP path.
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: pixi-config
+          configMap:
+            name: {{ include "servicex-mcp.fullname" . }}-pixi
+            items:
+              - key: pixi.toml
+                path: pixi.toml
+              {{- if .Values.servicexMcp.pixiLockContent }}
+              - key: pixi.lock
+                path: pixi.lock
+              {{- end }}
+        - name: workspace
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
