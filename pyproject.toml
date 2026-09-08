@@ -52,7 +52,7 @@ test = [
   "pytest >=9",
   "pytest-cov >=7",
   "pytest-asyncio >=0.24",
-  "httpx >=0.27",
+  "httpx >=0.27",  # required by starlette.testclient.TestClient, unrelated to our httpx2 runtime usage
 ]
 dev = [
   { include-group = "test" },
