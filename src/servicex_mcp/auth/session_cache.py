@@ -2,12 +2,30 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from servicex.servicex_client import ServiceXClient
+
+
+def _close_client_resources(client: ServiceXClient) -> None:
+    """Close the client's on-disk query cache (a real TinyDB file handle).
+
+    `build_http_servicex_client` opens a fresh `QueryCache` — and therefore
+    a real file handle — on every cache miss (see auth/factory.py). Nothing
+    else in this codebase ever calls `client.query_cache.close()`, so
+    eviction is the only place that can reliably release it; leaving this
+    to CPython's refcounting GC is a latent fd-exhaustion risk under
+    sustained concurrent HTTP load. Best-effort: a close failure must never
+    break cache eviction itself.
+    """
+    query_cache = getattr(client, "query_cache", None)
+    if query_cache is not None:
+        with contextlib.suppress(Exception):
+            query_cache.close()
 
 
 class SessionCache:
@@ -19,7 +37,8 @@ class SessionCache:
     (not just lazily on `get` of that exact key), so a session whose key
     is never queried again after expiry doesn't hold its ServiceXClient
     (and the token state it carries) in memory indefinitely — same
-    eviction discipline as `BridgeStateStore`.
+    eviction discipline as `BridgeStateStore`. Every eviction path also
+    closes the evicted client's query cache (see `_close_client_resources`).
     """
 
     def __init__(self) -> None:
@@ -36,6 +55,7 @@ class SessionCache:
             client, exp = entry
             if exp < time.time():
                 del self._data[session_id]
+                _close_client_resources(client)
                 return None
             return client
 
@@ -49,7 +69,8 @@ class SessionCache:
         now = time.time()
         expired = [sid for sid, (_, exp) in self._data.items() if exp < now]
         for sid in expired:
-            del self._data[sid]
+            client, _ = self._data.pop(sid)
+            _close_client_resources(client)
 
     def size(self) -> int:
         """Return the number of unexpired entries currently in the cache."""
@@ -58,6 +79,8 @@ class SessionCache:
             return sum(1 for _, exp in self._data.values() if exp >= now)
 
     def close(self) -> None:
-        """Evict all cached clients."""
+        """Evict all cached clients, closing each one's query cache."""
         with self._lock:
+            for client, _ in self._data.values():
+                _close_client_resources(client)
             self._data.clear()

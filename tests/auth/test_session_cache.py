@@ -9,6 +9,41 @@ from unittest.mock import MagicMock
 from servicex_mcp.auth.session_cache import SessionCache
 
 
+class TestSessionCacheClosesQueryCacheOnEviction:
+    def test_expired_entry_closes_query_cache_on_get(self) -> None:
+        cache = SessionCache()
+        client = MagicMock()
+        cache.put("sid-1", client, time.time() - 1)
+        assert cache.get("sid-1") is None
+        client.query_cache.close.assert_called_once()
+
+    def test_expired_entry_closes_query_cache_on_evict_locked(self) -> None:
+        cache = SessionCache()
+        stale_client = MagicMock()
+        cache.put("stale", stale_client, time.time() - 1)
+        # A fresh put() triggers _evict_locked(), not a get() on "stale".
+        cache.put("fresh", MagicMock(), time.time() + 3600)
+        stale_client.query_cache.close.assert_called_once()
+
+    def test_close_closes_query_cache_for_every_remaining_entry(self) -> None:
+        cache = SessionCache()
+        client_a = MagicMock()
+        client_b = MagicMock()
+        cache.put("a", client_a, time.time() + 3600)
+        cache.put("b", client_b, time.time() + 3600)
+        cache.close()
+        client_a.query_cache.close.assert_called_once()
+        client_b.query_cache.close.assert_called_once()
+
+    def test_a_failing_close_does_not_break_eviction(self) -> None:
+        cache = SessionCache()
+        broken_client = MagicMock()
+        broken_client.query_cache.close.side_effect = RuntimeError("db already closed")
+        cache.put("broken", broken_client, time.time() - 1)
+        # Must not raise, and the entry must still be evicted.
+        assert cache.get("broken") is None
+
+
 class TestSessionCache:
     def test_put_and_get_round_trip(self) -> None:
         cache = SessionCache()

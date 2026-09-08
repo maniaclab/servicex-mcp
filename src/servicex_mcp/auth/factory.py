@@ -53,6 +53,20 @@ def build_http_servicex_client(
     many callers with different tokens against one known backend URL and
     must not depend on a server-side config file, so this constructs the
     Configuration object directly instead of reading one from disk.
+
+    This bypasses ServiceXClient.__init__ entirely (via object.__new__) and
+    hand-sets the same five attributes __init__ would have — verified
+    against every ServiceXClient method this project's tools call. A future
+    servicex release adding a new attribute those methods start depending
+    on would surface as an AttributeError at call time, not here; re-check
+    this against ServiceXClient.__init__ on any servicex version bump.
+
+    Each call opens its own on-disk QueryCache (a real file handle) —
+    callers that cache the returned client (see BearerTokenClientFactory)
+    are responsible for closing client.query_cache on eviction; SessionCache
+    does this. A client that's never cached (no session id) relies on
+    CPython's refcounting GC to close it once the caller's reference to it
+    goes out of scope.
     """
     client = object.__new__(ServiceXClient)
     config = Configuration(api_endpoints=[], cache_path=cache_dir)
