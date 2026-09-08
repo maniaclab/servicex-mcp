@@ -287,6 +287,13 @@ class TestClassifyError:
         assert "**Recovery:**" in result
         assert "servicex_info" in result
 
+    def test_timeout_error_by_type_name_with_no_matching_message(self) -> None:
+        # asyncio.TimeoutError's __name__ is "TimeoutError"; its message may not
+        # contain the literal substring "timeout" (e.g. raised with no args).
+        result = classify_error(TimeoutError())
+        assert "**Recovery:**" in result
+        assert "servicex_info" in result
+
     def test_other_category_has_no_recovery_block(self) -> None:
         result = classify_error(Exception("something completely unexpected"))
         assert result == "Error: something completely unexpected"

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import itertools
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from servicex import ServiceXClient
 
 
 def human_bytes(n: float | None) -> str:
@@ -112,6 +115,7 @@ def classify_error(exc: Exception) -> str:
     elif (
         "connectionerror" in type_lower
         or "connection" in msg_lower
+        or "timeout" in type_lower
         or "timeout" in msg_lower
     ):
         guidance = (
@@ -257,7 +261,8 @@ def format_list(
     return "\n".join(lines)
 
 
-def get_servicex_client(ctx: Any) -> Any:
+def get_servicex_client(ctx: Any) -> ServiceXClient:
     """Return the ServiceXClient for the current request via the lifespan factory."""
     factory = ctx.request_context.lifespan_context["client_factory"]
-    return factory.get_client(ctx)
+    client: ServiceXClient = factory.get_client(ctx)
+    return client

@@ -366,11 +366,14 @@ def test_get_servicex_client_reads_lifespan_context() -> None:
 Copy `_helpers.py` from rucio-mcp, remove the `parse_did`/rucio-exception imports and `RULE_LIST_KEYS`, remove the `TOOL_ERRORS`/`current_tool_labels` metrics import (no Prometheus metrics module in v1 — plain `classify_error` without the `.inc()` calls; see below), and add:
 
 ```python
-def get_servicex_client(ctx: Any) -> Any:
+def get_servicex_client(ctx: Any) -> ServiceXClient:
     """Return the ServiceXClient for the current request via the lifespan factory."""
     factory = ctx.request_context.lifespan_context["client_factory"]
-    return factory.get_client(ctx)
+    client: ServiceXClient = factory.get_client(ctx)
+    return client
 ```
+
+(add `from servicex import ServiceXClient` under a `TYPE_CHECKING` guard at the top of the module — every future tool calls this, so it should carry a real return type rather than `Any` for mypy strict to catch mistakes on the resulting client's method calls.)
 
 Rewrite `classify_error` for ServiceX exception types (no metrics call — v1 has no Prometheus wiring):
 
@@ -407,6 +410,7 @@ def classify_error(exc: Exception) -> str:
     elif (
         "connectionerror" in type_lower
         or "connection" in msg_lower
+        or "timeout" in type_lower
         or "timeout" in msg_lower
     ):
         guidance = (
