@@ -1725,7 +1725,7 @@ Adapt `/Users/kratsg/rucio-mcp/src/rucio_mcp/auth/bridge_provider.py`. This is t
 - `authorize()` creates the pending `BridgeSession` (no `polling_url`) and returns the `/bridge?session=...` interstitial URL directly — no poller call, no background task.
 - New method `async def submit_token(self, session_id: str, token: str) -> None`: looks up the session; if missing/expired, raise `ValueError`. Otherwise validates `token` by constructing a throwaway `ServiceXAdapter(url=self._backend_url, refresh_token=token)` and calling `await adapter._get_authorization(force_reauth=True)` inside a `try/except` — a raised `AuthorizationError` (or any exception) means invalid token → `store.mark_error(session_id, str(exc))` and re-raise (or return a bool; pick one and match the test — recommend: catch, call `store.mark_error`, then `raise` so the route handler can render "invalid token" without duplicating error text). On success: mint `auth_code = secrets.token_urlsafe(32)`, call `store.mark_done(session_id, servicex_token=token, auth_code=auth_code)`.
   - **Why reach into `adapter._get_authorization`** (single-underscore, not name-mangled): `ServiceXAdapter` has no public "validate this token" method; `_get_authorization(force_reauth=True)` is the smallest call that actually exercises the `/token/refresh` exchange. Leave a comment explaining this — it's calling an internal method of a third-party library deliberately, which needs to be flagged in case a future `servicex` release renames it (pin `servicex>=3.3.0,<4` if this proves fragile — flag to Giordon in the PR description, don't silently add the pin yourself without asking, per the "ask before backward-compat workarounds" rule).
-- `get_client()`/`_resolve_cimd()`/`_cache_get`/`_cache_put`/`register_client()` (raises `NotImplementedError`, DCR disabled) — copy verbatim from rucio-mcp, unchanged (this part is generic OAuth/CIMD logic, not rucio-specific).
+- `get_client()`/`_resolve_cimd()`/`_cache_get`/`_cache_put`/`register_client()` (raises `NotImplementedError`, DCR disabled) — copy verbatim from rucio-mcp, unchanged (this part is generic OAuth/CIMD logic, not rucio-specific). **Also port the `_authorize_redirect_uri: contextvars.ContextVar[str | None]` module-level variable** from `rucio_mcp/auth/bridge_provider.py` — `get_client()`'s call to `cimd.client_with_requested_redirect(cached, _authorize_redirect_uri.get())` is dead weight without it: the contextvar is what threads the current `/authorize` request's `redirect_uri` into CIMD's port-agnostic loopback matching (Task 9's `client_with_requested_redirect`), which native MCP clients (Claude Desktop/Code binding an ephemeral loopback port per attempt) depend on to pass authorization at all. Task 14 MUST set this contextvar for the duration of each `/authorize` request — see that task's note.
 - `load_authorization_code()` / `exchange_authorization_code()` — copy structurally, rename `session.rucio_token` → `session.servicex_token`, `_jwt_expires_in(session.servicex_token)` unchanged (still decodes the JWT's `exp` claim — ServiceX refresh tokens are JWTs too).
 - `load_access_token()` — same passthrough pattern, rename `client_id="rucio-bridge"` → `client_id="servicex-bridge"`.
 - `load_refresh_token()` / `exchange_refresh_token()` / `revoke_token()` — copy verbatim (not-supported stubs).
@@ -2065,7 +2065,26 @@ git commit -m "feat: add BearerTokenClientFactory and config-free HTTP client bu
 
 **Step 2: Run to verify it fails.**
 
-**Step 3: Add to `server.py`**
+**Step 3a: Port `_AuthorizeContextMiddleware`.** Task 11 ported the
+`_authorize_redirect_uri` contextvar into `bridge_provider.py`, but nothing
+sets it without this ASGI middleware. Copy it from
+`/Users/kratsg/rucio-mcp/src/rucio_mcp/server.py` (search for
+`_AuthorizeContextMiddleware`, ~30 lines) verbatim — it is generic ASGI/OAuth
+glue, not rucio-specific: for every request whose path ends in `/authorize`,
+it extracts the `redirect_uri` query parameter, sets `_authorize_redirect_uri`
+for the duration of that request, and resets it in a `finally`. Wrap the ASGI
+app this middleware decorates around whatever `mcp.streamable_http_app()` (or
+equivalent) returns, before passing it to `uvicorn.run(...)`. Without this,
+`ServiceXBridgeProvider._resolve_cimd()`'s call to
+`cimd.client_with_requested_redirect(cached, _authorize_redirect_uri.get())`
+always receives `None`, and a native MCP client's ephemeral-loopback-port
+redirect (Claude Desktop/Code) will fail `/authorize` after the first
+successful attempt pins a stale port — write a test for this (send two
+`/authorize` requests with different loopback ports for the same CIMD
+`client_id`, assert both succeed) since it's exactly the kind of gap that
+passes every other test and only breaks in real native-app usage.
+
+**Step 3b: Add to `server.py`**
 
 ```python
 # add imports
