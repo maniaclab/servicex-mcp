@@ -14,8 +14,12 @@ class SessionCache:
     """Thread-safe cache of ServiceXClient instances keyed by MCP session ID.
 
     Each entry expires at a caller-supplied absolute epoch (typically
-    300 s from creation), so a new TokenInjectedClient is built once
-    per session and evicted after the fixed TTL.
+    300 s from creation), so a new client is built once per session and
+    evicted after the fixed TTL. Expired entries are swept on every `put`
+    (not just lazily on `get` of that exact key), so a session whose key
+    is never queried again after expiry doesn't hold its ServiceXClient
+    (and the token state it carries) in memory indefinitely — same
+    eviction discipline as `BridgeStateStore`.
     """
 
     def __init__(self) -> None:
@@ -38,7 +42,14 @@ class SessionCache:
     def put(self, session_id: str, client: ServiceXClient, expires_at: float) -> None:
         """Store a client under session_id, expiring at the given epoch."""
         with self._lock:
+            self._evict_locked()
             self._data[session_id] = (client, expires_at)
+
+    def _evict_locked(self) -> None:
+        now = time.time()
+        expired = [sid for sid, (_, exp) in self._data.items() if exp < now]
+        for sid in expired:
+            del self._data[sid]
 
     def size(self) -> int:
         """Return the number of unexpired entries currently in the cache."""

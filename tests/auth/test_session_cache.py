@@ -51,6 +51,16 @@ class TestSessionCache:
         cache.put("stale", MagicMock(), time.time() - 1)
         assert cache.size() == 1
 
+    def test_put_proactively_evicts_expired_entries_not_just_at_get(self) -> None:
+        # A session whose key is never queried again after expiry must not
+        # sit in the dict forever holding its client/token state.
+        cache = SessionCache()
+        cache.put("sid-stale", MagicMock(), time.time() - 1)
+        assert len(cache._data) == 1
+        cache.put("sid-fresh", MagicMock(), time.time() + 3600)
+        assert len(cache._data) == 1
+        assert "sid-stale" not in cache._data
+
     def test_concurrent_access_does_not_corrupt(self) -> None:
         cache = SessionCache()
         errors: list[Exception] = []
