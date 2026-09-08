@@ -3,6 +3,7 @@ servicex_cancel_transform, and servicex_delete_transform."""
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -15,6 +16,24 @@ from servicex_mcp.tools.transforms import register
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+
+def _sync_facade_over_asyncio_run() -> None:
+    """Mimic ServiceXClient.cancel_transform/delete_transform's real shape.
+
+    Both are sync methods that internally call asyncio.run(...). Calling
+    asyncio.run from within an already-running event loop (as any MCP tool
+    coroutine does) raises RuntimeError, so a tool that calls these
+    directly instead of via asyncio.to_thread would break against a real
+    client. A plain MagicMock can't catch that regression; this side_effect
+    reproduces the real failure mode so the happy-path tests actually
+    exercise it.
+    """
+
+    async def _inner() -> None:
+        return None
+
+    asyncio.run(_inner())
 
 
 @pytest.fixture
@@ -156,7 +175,9 @@ class TestServicexCancelTransform:
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
     ) -> None:
-        mock_servicex_client.cancel_transform = MagicMock(return_value=None)
+        mock_servicex_client.cancel_transform = MagicMock(
+            side_effect=lambda _transform_id: _sync_facade_over_asyncio_run()
+        )
         fn = registered_tools["servicex_cancel_transform"]
         result = await fn(transform_id="req-1", ctx=mock_ctx)
         assert "req-1" in result
@@ -198,7 +219,9 @@ class TestServicexDeleteTransform:
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
     ) -> None:
-        mock_servicex_client.delete_transform = MagicMock(return_value=None)
+        mock_servicex_client.delete_transform = MagicMock(
+            side_effect=lambda _transform_id: _sync_facade_over_asyncio_run()
+        )
         fn = registered_tools["servicex_delete_transform"]
         result = await fn(transform_id="req-1", ctx=mock_ctx)
         assert "req-1" in result

@@ -715,7 +715,8 @@ Client methods used (all on `ServiceXClient`, async, wrapped by `make_sync` on t
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver import Context, MCPServer  # noqa: TC002
 
@@ -728,6 +729,9 @@ from servicex_mcp.tools._helpers import (
     get_servicex_client,
     paginate_iter,
 )
+
+if TYPE_CHECKING:
+    from servicex.models import TransformStatus
 
 _TRANSFORM_KEYS = [
     "request_id",
@@ -742,11 +746,11 @@ _TRANSFORM_KEYS = [
 ]
 
 
-def _transform_to_dict(t: Any) -> dict[str, Any]:
+def _transform_to_dict(t: TransformStatus) -> dict[str, Any]:
     return {
         "request_id": t.request_id,
         "title": t.title,
-        "status": t.status.value if hasattr(t.status, "value") else t.status,
+        "status": t.status.value,
         "files": t.files,
         "files_completed": t.files_completed,
         "files_failed": t.files_failed,
@@ -791,8 +795,7 @@ def register(mcp: MCPServer) -> None:
     ) -> str:
         """Get the full status of one transform by its request ID.
 
-        Includes the object-store/minio location details needed to fetch
-        results once the transform completes.
+        Includes a log_url for debugging once the transform completes.
         """
         try:
             client = get_servicex_client(ctx)
@@ -817,7 +820,11 @@ def register(mcp: MCPServer) -> None:
             return write_error
         try:
             client = get_servicex_client(ctx)
-            client.cancel_transform(transform_id)
+            # cancel_transform is a sync facade that internally calls
+            # asyncio.run(...); calling it directly here would raise
+            # "asyncio.run() cannot be called from a running event loop"
+            # since this tool already runs on the server's event loop.
+            await asyncio.to_thread(client.cancel_transform, transform_id)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
         return f"Transform {transform_id} cancelled."
@@ -832,7 +839,9 @@ def register(mcp: MCPServer) -> None:
             return write_error
         try:
             client = get_servicex_client(ctx)
-            client.delete_transform(transform_id)
+            # See servicex_cancel_transform: delete_transform is a sync facade
+            # over asyncio.run(...) and must not be called directly here.
+            await asyncio.to_thread(client.delete_transform, transform_id)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
         return f"Transform {transform_id} deleted."
@@ -857,7 +866,7 @@ git commit -m "feat: add transform inspection and management tools"
 - Create: `src/servicex_mcp/tools/datasets.py`
 - Test: `tests/test_tools_datasets.py`
 
-Same pattern as Task 4. Client methods: `get_datasets(did_finder=None, show_deleted=False) -> list[CachedDataset]` (sync — not `_async` suffixed; call directly, it internally does `_async_execute_and_wait`), `get_dataset(dataset_id) -> CachedDataset`, `delete_dataset(dataset_id) -> bool`.
+Same pattern as Task 4. Client methods: `get_datasets(did_finder=None, show_deleted=False) -> list[CachedDataset]`, `get_dataset(dataset_id) -> CachedDataset`, `delete_dataset(dataset_id) -> bool` — **all three are sync facades that internally call `_async_execute_and_wait(coro) = asyncio.run(coro)`**, not `_async`-suffixed async methods. Task 4's code-quality review caught this exact pattern on `cancel_transform`/`delete_transform`: calling a sync-over-`asyncio.run` method directly from inside an already-running async MCP tool raises `RuntimeError: asyncio.run() cannot be called from a running event loop` (verified empirically). Every call to `get_datasets`, `get_dataset`, and `delete_dataset` in this task's tools MUST be wrapped in `await asyncio.to_thread(client.get_datasets, did_finder, show_deleted)` (etc.) — never called directly. Write a test for each tool that reproduces this failure mode if the wrapping is removed (see `tests/test_tools_transforms.py`'s `_sync_facade_over_asyncio_run()` helper for the pattern: a mock `side_effect` that itself calls `asyncio.run(...)` on a trivial coroutine, so a regression is a failing test, not a silently-green suite with a MagicMock that never touches real asyncio machinery).
 
 `CachedDataset` fields (`servicex/models.py`): `id`, `name`, `did_finder`, `n_files`, `size` (byte-key!), `events`, `last_used`, `last_updated`, `lookup_status`, `is_stale`.
 

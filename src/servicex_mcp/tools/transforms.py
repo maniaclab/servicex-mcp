@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver import Context, MCPServer  # noqa: TC002
 
@@ -15,6 +16,9 @@ from servicex_mcp.tools._helpers import (
     get_servicex_client,
     paginate_iter,
 )
+
+if TYPE_CHECKING:
+    from servicex.models import TransformStatus
 
 _TRANSFORM_KEYS = [
     "request_id",
@@ -29,11 +33,11 @@ _TRANSFORM_KEYS = [
 ]
 
 
-def _transform_to_dict(t: Any) -> dict[str, Any]:
+def _transform_to_dict(t: TransformStatus) -> dict[str, Any]:
     return {
         "request_id": t.request_id,
         "title": t.title,
-        "status": t.status.value if hasattr(t.status, "value") else t.status,
+        "status": t.status.value,
         "files": t.files,
         "files_completed": t.files_completed,
         "files_failed": t.files_failed,
@@ -78,8 +82,7 @@ def register(mcp: MCPServer) -> None:
     ) -> str:
         """Get the full status of one transform by its request ID.
 
-        Includes the object-store/minio location details needed to fetch
-        results once the transform completes.
+        Includes a log_url for debugging once the transform completes.
         """
         try:
             client = get_servicex_client(ctx)
@@ -104,7 +107,11 @@ def register(mcp: MCPServer) -> None:
             return write_error
         try:
             client = get_servicex_client(ctx)
-            client.cancel_transform(transform_id)
+            # cancel_transform is a sync facade that internally calls
+            # asyncio.run(...); calling it directly here would raise
+            # "asyncio.run() cannot be called from a running event loop"
+            # since this tool already runs on the server's event loop.
+            await asyncio.to_thread(client.cancel_transform, transform_id)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
         return f"Transform {transform_id} cancelled."
@@ -119,7 +126,9 @@ def register(mcp: MCPServer) -> None:
             return write_error
         try:
             client = get_servicex_client(ctx)
-            client.delete_transform(transform_id)
+            # See servicex_cancel_transform: delete_transform is a sync facade
+            # over asyncio.run(...) and must not be called directly here.
+            await asyncio.to_thread(client.delete_transform, transform_id)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
         return f"Transform {transform_id} deleted."
