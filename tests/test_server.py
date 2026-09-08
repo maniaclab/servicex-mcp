@@ -24,16 +24,21 @@ class TestMakeStdioMcp:
         with patch("servicex_mcp.server.ServiceXClient"):
             mcp = _make_stdio_mcp(backend="test-backend")
         names = {tool.name for tool in mcp._tool_manager.list_tools()}
-        assert "servicex_info" in names
-        assert "servicex_list_code_generators" in names
-        assert "servicex_list_transforms" in names
-        assert "servicex_get_transform_status" in names
-        assert "servicex_cancel_transform" in names
-        assert "servicex_delete_transform" in names
-        assert "servicex_list_datasets" in names
-        assert "servicex_get_dataset" in names
-        assert "servicex_delete_dataset" in names
-        assert "servicex_submit_query" in names
+        # Exact set, not membership: a future tool module registered but
+        # left off this list (or a duplicate/typo'd name colliding across
+        # modules) should fail this test loudly, not silently pass.
+        assert names == {
+            "servicex_info",
+            "servicex_list_code_generators",
+            "servicex_list_transforms",
+            "servicex_get_transform_status",
+            "servicex_cancel_transform",
+            "servicex_delete_transform",
+            "servicex_list_datasets",
+            "servicex_get_dataset",
+            "servicex_delete_dataset",
+            "servicex_submit_query",
+        }
 
     def test_does_not_construct_client_at_build_time(self) -> None:
         # ServiceXClient() must only be constructed inside the lifespan, not

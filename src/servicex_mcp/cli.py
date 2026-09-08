@@ -53,6 +53,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "serve":
+        # basicConfig's default stream is stderr — this must stay that way:
+        # stdio transport carries MCP's JSON-RPC framing on stdout, and any
+        # log line written there would corrupt the protocol.
         logging.basicConfig(
             level=getattr(logging, args.log_level.upper()),
             format="%(asctime)s %(levelname)s %(name)s: %(message)s",
