@@ -73,8 +73,8 @@ check-docstrings = { cmd = "pydocstyle src/servicex_mcp/", description = "Check 
 kubernetes-helm = "*"
 
 [feature.helm.tasks]
-helm-lint = { cmd = "helm lint charts/servicex-mcp --set ingress.host=servicex-mcp.example.com", description = "Lint the servicex-mcp Helm chart" }
-helm-template = { cmd = "helm template s charts/servicex-mcp --set ingress.host=servicex-mcp.example.com", description = "Render the chart with default (OIDC) values" }
+helm-lint = { cmd = "helm lint charts/servicex-mcp --set ingress.host=servicex-mcp.example.com --set auth.backendUrl=https://servicex-mcp.example.org", description = "Lint the servicex-mcp Helm chart" }
+helm-template = { cmd = "helm template s charts/servicex-mcp --set ingress.host=servicex-mcp.example.com --set auth.backendUrl=https://servicex-mcp.example.org", description = "Render the chart with default values, including the required auth.backendUrl" }
 
 [feature.dev.dependencies]
 prek = "*"

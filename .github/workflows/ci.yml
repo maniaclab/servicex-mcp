@@ -48,6 +48,15 @@ jobs:
       - name: Run helm lint
         run: pixi run helm-lint
 
+      # helm lint does not propagate a `fail()` raised from inside a template
+      # (e.g. the chart's required auth.backendUrl check, invoked via
+      # `include` inside the Deployment's container args) as a lint error --
+      # it only logs it at INFO level and still exits 0. helm template does
+      # error on that path, so it's the step that actually exercises the
+      # serve-args construction an operator would hit first.
+      - name: Run helm template
+        run: pixi run helm-template
+
   checks:
     name: Check Python ${{ matrix.python-version }} on ${{ matrix.runs-on }}
     runs-on: ${{ matrix.runs-on }}
