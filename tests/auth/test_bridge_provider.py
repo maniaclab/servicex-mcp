@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +14,7 @@ from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
     AuthorizationParams,
+    IdentityAssertionParams,
     RefreshToken,
     TokenError,
 )
@@ -350,6 +352,33 @@ class TestSubmitToken:
         assert updated is not None
         assert updated.status == "error"
 
+    async def test_submit_token_invalid_logs_a_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        provider: ServiceXBridgeProvider,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # A validation failure must be visible in server logs, not just
+        # recorded on the session — this is the operator-facing signal for
+        # exactly the servicex-upgrade fragility the plan calls out.
+        session = _put_pending_session(provider)
+        fake_adapter = MagicMock()
+        fake_adapter._get_authorization = AsyncMock(
+            side_effect=AuthorizationError("nope")
+        )
+        monkeypatch.setattr(
+            "servicex_mcp.auth.bridge_provider.ServiceXAdapter",
+            lambda *a, **k: fake_adapter,  # noqa: ARG005
+        )
+        with (
+            caplog.at_level(logging.WARNING),
+            pytest.raises(AuthorizationError),
+        ):
+            await provider.submit_token(session.session_id, "bad-token")
+        assert any(
+            "token validation failed" in record.message for record in caplog.records
+        )
+
     async def test_submit_token_constructs_adapter_with_backend_url(
         self, monkeypatch: pytest.MonkeyPatch, provider: ServiceXBridgeProvider
     ) -> None:
@@ -514,6 +543,13 @@ class TestRefreshAndRevoke:
     async def test_revoke_token_is_noop(self, provider: ServiceXBridgeProvider) -> None:
         token = AccessToken(token="tok", client_id="c", scopes=[])
         await provider.revoke_token(token)  # must not raise
+
+    async def test_exchange_identity_assertion_raises(
+        self, provider: ServiceXBridgeProvider, client_info: OAuthClientInformationFull
+    ) -> None:
+        params = IdentityAssertionParams(assertion="ignored")
+        with pytest.raises(TokenError):
+            await provider.exchange_identity_assertion(client_info, params)
 
 
 def _make_test_jwt(payload: dict[str, object]) -> str:

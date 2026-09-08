@@ -32,6 +32,7 @@ from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
     AuthorizationParams,
+    IdentityAssertionParams,
     RefreshToken,
     TokenError,
 )
@@ -261,6 +262,16 @@ class ServiceXBridgeProvider:
         try:
             await adapter._get_authorization(force_reauth=True)
         except Exception as exc:
+            # Logged (not just recorded on the session) so a validation
+            # failure caused by a future servicex release renaming/removing
+            # _get_authorization is visible in server logs immediately,
+            # rather than only discoverable via user reports or by
+            # inspecting store.session_counts() after the fact.
+            _log.warning(
+                "Bridge session %s: token validation failed: %s",
+                session_id[:8],
+                exc,
+            )
             self.store.mark_error(session_id, str(exc))
             raise
 
@@ -343,6 +354,23 @@ class ServiceXBridgeProvider:
         raise TokenError(
             error="unsupported_grant_type",
             error_description="Refresh tokens are not supported; re-authenticate",
+        )
+
+    async def exchange_identity_assertion(
+        self,
+        _client: OAuthClientInformationFull,
+        _params: IdentityAssertionParams,
+    ) -> OAuthToken:
+        """The SEP-990 ID-JAG/jwt-bearer grant is not supported; always raises.
+
+        Required to satisfy OAuthAuthorizationServerProvider's structural
+        protocol even though this provider doesn't inherit from it directly
+        — without this, a future caller that type-annotates a variable as
+        OAuthAuthorizationServerProvider would fail mypy's structural check.
+        """
+        raise TokenError(
+            error="unsupported_grant_type",
+            error_description="The JWT bearer grant is not supported by this authorization server",
         )
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
