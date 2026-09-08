@@ -40,6 +40,10 @@ class TestBridgeSession:
         s = _make_session()
         assert s.error_message is None
 
+    def test_servicex_token_excluded_from_repr(self) -> None:
+        s = _make_session(servicex_token="super-secret-refresh-token")
+        assert "super-secret-refresh-token" not in repr(s)
+
 
 class TestBridgeStateStore:
     def test_get_returns_none_for_unknown_session(self) -> None:
@@ -131,6 +135,33 @@ class TestBridgeStateStore:
     def test_pop_by_auth_code_unknown_returns_none(self) -> None:
         store = BridgeStateStore()
         assert store.pop_by_auth_code("ghost") is None
+
+    def test_pop_by_auth_code_rejects_expired_session(self) -> None:
+        store = BridgeStateStore()
+        store.put(_make_session("s1", expires_at=time.time() + 300))
+        store.mark_done("s1", servicex_token="tok", auth_code="code-1")
+        # Simulate the session having expired between mark_done and the
+        # /token exchange, without a get()/put() happening in between to
+        # trigger lazy eviction first.
+        store._by_session["s1"].expires_at = time.time() - 1
+        assert store.pop_by_auth_code("code-1") is None
+        # And the stale index entries are actually gone, not just hidden.
+        assert "code-1" not in store._by_code
+        assert "s1" not in store._by_session
+
+    def test_mark_done_twice_does_not_leak_stale_auth_code_index(self) -> None:
+        store = BridgeStateStore()
+        store.put(_make_session("s1"))
+        store.mark_done("s1", servicex_token="tok-1", auth_code="code-1")
+        # A double-submitted /bridge form re-validates and re-marks done
+        # with a fresh code; the first code must not linger as a dangling
+        # _by_code entry pointing at a session that now has a new code.
+        store.mark_done("s1", servicex_token="tok-2", auth_code="code-2")
+        assert "code-1" not in store._by_code
+        assert store.get_by_auth_code("code-1") is None
+        popped = store.pop_by_auth_code("code-2")
+        assert popped is not None
+        assert popped.servicex_token == "tok-2"
 
     def test_mark_done_on_unknown_session_is_noop(self) -> None:
         store = BridgeStateStore()

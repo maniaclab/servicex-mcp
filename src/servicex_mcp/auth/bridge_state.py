@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -34,7 +34,10 @@ class BridgeSession:
     state: str | None
     expires_at: float
     status: str = "pending"  # "pending" | "done" | "error"
-    servicex_token: str | None = None
+    # repr=False: this is a live credential (the caller's ServiceX refresh
+    # token) — never let it land in a default dataclass repr, log line, or
+    # exception traceback via an in-scope local.
+    servicex_token: str | None = field(default=None, repr=False)
     auth_code: str | None = None
     error_message: str | None = None
 
@@ -76,21 +79,37 @@ class BridgeStateStore:
             return session
 
     def pop_by_auth_code(self, auth_code: str) -> BridgeSession | None:
-        """Atomically remove and return the session for *auth_code* (single-use)."""
+        """Atomically remove and return the session for *auth_code* (single-use).
+
+        Enforces the same TTL as every other lookup: a code that's still
+        indexed but whose session has expired is treated as not found,
+        not silently redeemed past its 5-minute window.
+        """
         with self._lock:
             session_id = self._by_code.pop(auth_code, None)
             if session_id is None:
                 return None
-            return self._by_session.pop(session_id, None)
+            session = self._by_session.pop(session_id, None)
+            if session is not None and session.expires_at <= time.time():
+                return None
+            return session
 
     def mark_done(
         self, session_id: str, *, servicex_token: str, auth_code: str
     ) -> None:
-        """Transition *session_id* to ``done`` and register the auth code index."""
+        """Transition *session_id* to ``done`` and register the auth code index.
+
+        Idempotent against repeated calls for the same session (e.g. a
+        double-submitted /bridge form): a stale auth_code from a prior call
+        is dropped from ``_by_code`` before the new one is registered, so
+        it never lingers as a dangling index entry pointing at nothing.
+        """
         with self._lock:
             s = self._by_session.get(session_id)
             if s is None:
                 return
+            if s.auth_code and s.auth_code != auth_code:
+                self._by_code.pop(s.auth_code, None)
             s.status = "done"
             s.servicex_token = servicex_token
             s.auth_code = auth_code
