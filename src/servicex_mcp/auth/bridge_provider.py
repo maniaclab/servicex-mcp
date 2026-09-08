@@ -260,7 +260,7 @@ class ServiceXBridgeProvider:
         # removes it.
         adapter = ServiceXAdapter(url=self._backend_url, refresh_token=token)
         try:
-            await adapter._get_authorization(force_reauth=True)
+            await adapter._get_authorization(force_reauth=True)  # pylint: disable=protected-access
         except Exception as exc:
             # Logged (not just recorded on the session) so a validation
             # failure caused by a future servicex release renaming/removing

@@ -74,7 +74,7 @@ def build_http_servicex_client(
     client.endpoints = {}
     client.servicex = ServiceXAdapter(url, refresh_token=refresh_token)
     client.query_cache = QueryCache(config)
-    client._code_generators = None
+    client._code_generators = None  # pylint: disable=protected-access
     return client
 
 
