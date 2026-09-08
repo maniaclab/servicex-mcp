@@ -184,6 +184,7 @@ class TestServicexDeleteDataset:
         result = await fn(dataset_id=1, ctx=mock_ctx)
         assert "1" in result
         assert "deleted" in result.lower()
+        assert "stale=True" in result
         mock_servicex_client.delete_dataset.assert_called_once_with(1)
 
     async def test_read_only_mode_blocks_delete(

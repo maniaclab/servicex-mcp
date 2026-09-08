@@ -37,6 +37,9 @@ _BYTE_KEYS = frozenset({"size"})
 
 
 def _dataset_to_dict(d: CachedDataset) -> dict[str, Any]:
+    # CachedDataset.files (the per-file record list) is deliberately omitted:
+    # n_files already gives the count, and per-file records would bloat this
+    # summary view with no dedicated tool to drill into them yet.
     return {
         "id": d.id,
         "name": d.name,
@@ -121,7 +124,11 @@ def register(mcp: MCPServer) -> None:
             client = get_servicex_client(ctx)
             # See servicex_list_datasets: delete_dataset is a sync facade over
             # asyncio.run(...) and must not be called directly here.
-            await asyncio.to_thread(client.delete_dataset, dataset_id)
+            stale = await asyncio.to_thread(client.delete_dataset, dataset_id)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
-        return f"Dataset {dataset_id} deleted."
+        # delete_dataset returns the server's "stale" flag for this dataset
+        # record (servicex.servicex_adapter.ServiceXAdapter.delete_dataset),
+        # not an unconditional success/failure signal — surface it rather
+        # than assuming the delete always succeeded.
+        return f"Dataset {dataset_id} deleted (stale={stale})."
