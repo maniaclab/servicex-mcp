@@ -1,18 +1,22 @@
-"""Tests for ServiceXClientFactory, EnvBasedClientFactory, and BearerTokenClientFactory."""
+"""Tests for ServiceXClientFactory, EnvBasedClientFactory, BearerTokenClientFactory, and BrokerServiceXClientFactory."""
 
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from servicex_mcp.auth.factory import (
     BearerTokenClientFactory,
+    BrokerServiceXClientFactory,
     EnvBasedClientFactory,
     ServiceXClientFactory,
+    _BrokerServiceXAdapter,
     _cache_key,
     _extract_request_auth,
+    build_broker_servicex_client,
     build_http_servicex_client,
 )
 from servicex_mcp.auth.session_cache import SessionCache
@@ -284,3 +288,164 @@ class TestBearerTokenClientFactory:
         }.get
         with pytest.raises(PermissionError, match="Bearer"):
             factory.get_client(ctx)
+
+
+@dataclass
+class _FakeRedeemedToken:
+    access_token: str
+
+
+class _FakeRedeemer:
+    """Test double for ServiceXRedeemer — records calls, returns a fixed access token."""
+
+    def __init__(self, access_token: str = "redeemed-access-tok") -> None:
+        self.access_token_value = access_token
+        self.calls: list[str] = []
+
+    async def access_token(self, bearer: str) -> _FakeRedeemedToken:
+        self.calls.append(bearer)
+        return _FakeRedeemedToken(access_token=self.access_token_value)
+
+
+class TestBrokerServiceXAdapter:
+    async def test_get_token_redeems_via_broker_and_sets_token(self) -> None:
+        redeemer = _FakeRedeemer(access_token="fresh-tok")
+        adapter = _BrokerServiceXAdapter(
+            "https://servicex.example.com", redeemer=redeemer, bearer="broker-bearer"
+        )
+        await adapter._get_token()
+        assert adapter.token == "fresh-tok"
+        assert redeemer.calls == ["broker-bearer"]
+
+    def test_refresh_token_slot_holds_the_bearer(self) -> None:
+        """The base class's refresh_token slot is reused to store the bearer.
+
+        This is deliberate (see the adapter's docstring): it only needs to
+        satisfy ServiceXAdapter._get_authorization()'s "something to
+        authenticate with" truthiness guard — _get_token is fully
+        overridden, so the base class never reads this value as an actual
+        ServiceX refresh token.
+        """
+        adapter = _BrokerServiceXAdapter(
+            "https://servicex.example.com",
+            redeemer=_FakeRedeemer(),
+            bearer="broker-bearer",
+        )
+        assert adapter.refresh_token == "broker-bearer"
+        assert adapter.token is None
+
+
+class TestBuildBrokerServiceXClient:
+    def test_builds_client_with_broker_adapter(self, tmp_path) -> None:
+        redeemer = _FakeRedeemer()
+        client = build_broker_servicex_client(
+            url="https://servicex.example.com",
+            redeemer=redeemer,
+            bearer="broker-bearer",
+            cache_dir=str(tmp_path),
+        )
+        try:
+            assert isinstance(client.servicex, _BrokerServiceXAdapter)
+            assert client.servicex.url == "https://servicex.example.com"
+        finally:
+            client.query_cache.close()
+
+
+class TestBrokerServiceXClientFactory:
+    def _make_ctx(self, bearer: str, session_id: str = "sess-1") -> MagicMock:
+        ctx = MagicMock()
+        headers: dict[str, str] = {
+            "authorization": f"Bearer {bearer}",
+            "mcp-session-id": session_id,
+        }
+        ctx.request_context.request.headers.get.side_effect = headers.get
+        return ctx
+
+    def test_get_client_builds_broker_client(self) -> None:
+        ctx = self._make_ctx("af-broker-identity-tok")
+        cache = SessionCache()
+        redeemer = _FakeRedeemer()
+        factory = BrokerServiceXClientFactory(
+            cache=cache,
+            redeemer=redeemer,
+            backend_url="https://servicex.example.com",
+            cache_dir="/tmp/cache",
+        )
+        sentinel = MagicMock()
+        with patch(
+            "servicex_mcp.auth.factory.build_broker_servicex_client",
+            return_value=sentinel,
+        ) as mock_build:
+            client = factory.get_client(ctx)
+        assert client is sentinel
+        mock_build.assert_called_once_with(
+            url="https://servicex.example.com",
+            redeemer=redeemer,
+            bearer="af-broker-identity-tok",
+            cache_dir="/tmp/cache",
+        )
+        # No redeem call happens in get_client itself — redemption is lazy,
+        # deferred to the adapter's own _get_token on first real use.
+        assert redeemer.calls == []
+
+    def test_get_client_returns_cached_client_on_second_call(self) -> None:
+        ctx = self._make_ctx("af-broker-identity-tok", session_id="fixed-session")
+        cache = SessionCache()
+        factory = BrokerServiceXClientFactory(
+            cache=cache,
+            redeemer=_FakeRedeemer(),
+            backend_url="https://servicex.example.com",
+            cache_dir="/tmp/cache",
+        )
+        with patch(
+            "servicex_mcp.auth.factory.build_broker_servicex_client",
+            side_effect=lambda **_kw: MagicMock(),
+        ):
+            first = factory.get_client(ctx)
+            second = factory.get_client(ctx)
+        assert first is second
+
+    def test_missing_session_id_skips_cache(self) -> None:
+        cache = SessionCache()
+        factory = BrokerServiceXClientFactory(
+            cache=cache,
+            redeemer=_FakeRedeemer(),
+            backend_url="https://servicex.example.com",
+            cache_dir="/tmp/cache",
+        )
+        ctx1 = self._make_ctx("tok", session_id="")
+        ctx2 = self._make_ctx("tok", session_id="")
+        with patch(
+            "servicex_mcp.auth.factory.build_broker_servicex_client",
+            side_effect=lambda **_kw: MagicMock(),
+        ):
+            first = factory.get_client(ctx1)
+            second = factory.get_client(ctx2)
+        assert first is not second
+        assert cache.size() == 0
+
+    def test_missing_bearer_raises_permission_error(self) -> None:
+        cache = SessionCache()
+        factory = BrokerServiceXClientFactory(
+            cache=cache,
+            redeemer=_FakeRedeemer(),
+            backend_url="https://servicex.example.com",
+            cache_dir="/tmp/cache",
+        )
+        ctx = MagicMock()
+        ctx.request_context.request.headers.get.side_effect = {
+            "mcp-session-id": "s"
+        }.get
+        with pytest.raises(PermissionError, match="Bearer"):
+            factory.get_client(ctx)
+
+    def test_close_delegates_to_cache(self) -> None:
+        cache = MagicMock(spec=SessionCache)
+        factory = BrokerServiceXClientFactory(
+            cache=cache,
+            redeemer=_FakeRedeemer(),
+            backend_url="https://servicex.example.com",
+            cache_dir="/tmp/cache",
+        )
+        factory.close()
+        cache.close.assert_called_once()

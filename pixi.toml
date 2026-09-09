@@ -6,6 +6,9 @@ platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
 preview = ["pixi-build"]
 exclude-newer = "7d"
 
+[exclude-newer]
+af-credentials = "0d"
+
 [dependencies]
 servicex-mcp = { path = "./" }
 
@@ -29,9 +32,7 @@ httpx2 = ">=2.0.0"
 pydantic = ">=2.11"
 starlette = ">=0.27"
 uvicorn = ">=0.31.1"
-
-[feature.py310.dependencies]
-python = "<3.11,>=3.10"
+af-credentials = ">=0.3.1"
 
 [feature.py311.dependencies]
 python = "<3.12,>=3.11"
@@ -99,7 +100,6 @@ build-check = { cmd = "twine check --strict ./dist/*", depends-on = ["build"], d
 docs = ["docs"]
 dev = ["dev"]
 helm = { features = ["helm"], no-default-feature = true }
-py310 = ["test", "py310"]
 py311 = ["test", "py311"]
 py312 = ["test", "py312"]
 py313 = ["test", "py313"]
