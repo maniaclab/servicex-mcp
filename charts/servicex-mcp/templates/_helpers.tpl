@@ -99,6 +99,9 @@ one ServiceX backend per deployment and no Prometheus metrics module yet.
     "--port" (.Values.server.port | toString)
     "--cache-dir" .Values.server.cacheDir
     "--log-level" .Values.logLevel -}}
+{{- if .Values.auth.brokerUrl -}}
+{{- $args = concat $args (list "--broker-url" .Values.auth.brokerUrl) -}}
+{{- end -}}
 {{- if .Values.readOnly -}}
 {{- $args = append $args "--read-only" -}}
 {{- end -}}
