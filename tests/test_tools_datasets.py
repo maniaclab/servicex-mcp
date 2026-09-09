@@ -53,8 +53,8 @@ def _make_cached_dataset(**overrides: object) -> CachedDataset:
         "n_files": 10,
         "size": 50_000_000_000_000,
         "events": 12345,
-        "last_used": datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
-        "last_updated": datetime.datetime(2026, 1, 1, 1, tzinfo=datetime.timezone.utc),
+        "last_used": datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+        "last_updated": datetime.datetime(2026, 1, 1, 1, tzinfo=datetime.UTC),
         "lookup_status": "complete",
         "is_stale": False,
     }

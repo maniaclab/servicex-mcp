@@ -11,7 +11,7 @@ description = "MCP Server for ServiceX"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
   "Development Status :: 1 - Planning",
   "Intended Audience :: Science/Research",
@@ -20,7 +20,6 @@ classifiers = [
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -36,10 +35,13 @@ dependencies = [
   "starlette>=0.27",
   "uvicorn>=0.31.1",
   # Broker-mode client factory (BrokerServiceXClientFactory) redeems a
-  # ServiceX access token from the AF MCP broker via ProxyClient. Only
-  # ProxyClient's generic x509/krb5 machinery is used at this version --
-  # its ServiceX-specific kind="servicex"/access_token() support is still
-  # landing (maniaclab/af-credentials#9); see server.py's construction site.
+  # ServiceX access token from the AF MCP broker via ProxyClient's
+  # kind="servicex"/access_token() support (maniaclab/af-credentials#9,
+  # merged and tagged af-credentials v0.3.1 -- not yet built on conda-forge
+  # as of this writing, hence the structural-typing seam at server.py's
+  # construction site rather than a hard af_credentials.ProxyClient import
+  # there). Requires python>=3.11 (af-credentials' published conda-forge
+  # build's floor), which is why this project's own floor is 3.11 now.
   "af-credentials>=0.3.0",
 ]
 
@@ -98,7 +100,7 @@ report.exclude_also = [
 
 [tool.mypy]
 files = ["src", "tests"]
-python_version = "3.10"
+python_version = "3.11"
 warn_unused_configs = true
 strict = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
@@ -131,7 +133,7 @@ ignore = ["PLR09", "PLR2004"]
 "tests/**" = ["T20"]
 
 [tool.pylint]
-py-version = "3.10"
+py-version = "3.11"
 ignore-paths = [".*/_version.py"]
 reports.output-format = "colorized"
 similarities.ignore-imports = "yes"

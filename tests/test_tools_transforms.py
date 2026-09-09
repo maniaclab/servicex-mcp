@@ -67,8 +67,8 @@ def _make_transform_status(**overrides: object) -> TransformStatus:
         "files-completed": 10,
         "files-failed": 0,
         "files-remaining": 0,
-        "submit-time": datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
-        "finish-time": datetime.datetime(2026, 1, 1, 1, tzinfo=datetime.timezone.utc),
+        "submit-time": datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+        "finish-time": datetime.datetime(2026, 1, 1, 1, tzinfo=datetime.UTC),
         "log-url": "http://log",
     }
     fields.update(overrides)

@@ -128,9 +128,7 @@ class _BrokerServiceXAdapter(ServiceXAdapter):  # type: ignore[misc]
     reached — it is fully replaced below.
     """
 
-    def __init__(
-        self, url: str, *, redeemer: ServiceXRedeemer, bearer: str
-    ) -> None:
+    def __init__(self, url: str, *, redeemer: ServiceXRedeemer, bearer: str) -> None:
         """Construct against *url*, redeeming *bearer* via *redeemer* on demand."""
         super().__init__(url, refresh_token=bearer)
         self._redeemer = redeemer
