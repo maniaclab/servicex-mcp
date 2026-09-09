@@ -17,23 +17,27 @@ if TYPE_CHECKING:
 
 
 class _RedeemedAccessToken(Protocol):
-    """Structural shape of a redeemed ServiceX access token."""
+    """Structural shape of a redeemed ServiceX access token.
 
-    access_token: str
+    A read-only property, not a plain attribute: a plain ``access_token:
+    str`` annotation would require write access too (PEP 544's default for
+    protocol attributes), which af-credentials' actual ``ServiceXAccessToken``
+    -- a frozen dataclass -- cannot satisfy.
+    """
+
+    @property
+    def access_token(self) -> str: ...
 
 
 class ServiceXRedeemer(Protocol):
     """Redeems a ServiceX access token from the AF MCP broker for a given bearer.
 
-    Matches ``af_credentials.proxy.ProxyClient``'s forthcoming
-    ``kind="servicex"`` support (maniaclab/af-credentials#9) via structural
-    typing rather than a hard import: that support has not shipped in a
-    released af-credentials version yet (tracked in
-    maniaclab/af-mcp-platform#295 / maniaclab/af-credentials#9). Once it
-    has, ``ProxyClient(broker_url, kind="servicex")`` satisfies this
-    protocol directly — the one concrete construction site lives in
-    ``server.py``, keeping this module's tests independent of
-    af-credentials' release status.
+    Matches ``af_credentials.proxy.ProxyClient``'s ``kind="servicex"``
+    support (maniaclab/af-credentials#9, shipped in af-credentials v0.3.1)
+    via structural typing rather than a hard import: ``ProxyClient(broker_url,
+    kind="servicex")`` satisfies this protocol directly, but the one concrete
+    construction site lives in ``server.py``, keeping this module's tests
+    independent of af-credentials being installed at all.
     """
 
     async def access_token(self, bearer: str) -> _RedeemedAccessToken:

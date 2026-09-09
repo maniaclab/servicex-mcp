@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
 import uvicorn
@@ -23,12 +23,10 @@ from servicex_mcp.auth.bridge_provider import (
     _authorize_redirect_uri,
 )
 from servicex_mcp.auth.bridge_routes import register_bridge_routes
-from servicex_mcp.auth.factory import (  # pylint: disable=unused-import
+from servicex_mcp.auth.factory import (
     BearerTokenClientFactory,
     BrokerServiceXClientFactory,
     EnvBasedClientFactory,
-    # Used only inside cast("ServiceXRedeemer", ...) below -- pylint's
-    # unused-import check doesn't see string-quoted cast() type args.
     ServiceXRedeemer,
 )
 from servicex_mcp.auth.session_cache import SessionCache
@@ -224,17 +222,12 @@ def _make_broker_http_mcp(
     BrokerServiceXClientFactory's docstring.
     """
     cache = SessionCache()
-    # kind="servicex" and access_token() are not in any released af-credentials
-    # version yet (maniaclab/af-credentials#9) — this construction is the one
-    # place in this codebase that depends on that unreleased interface. The
-    # cast, not just a bare instance, keeps every *downstream* use of
-    # `redeemer` (e.g. BrokerServiceXClientFactory's constructor) clean —
-    # only this one line needs to know ProxyClient doesn't structurally
-    # satisfy ServiceXRedeemer yet.
-    redeemer = cast(
-        "ServiceXRedeemer",
-        ProxyClient(broker_url, kind="servicex"),  # type: ignore[arg-type]
-    )
+    # af-credentials' kind="servicex"/access_token() support shipped in
+    # v0.3.1 (maniaclab/af-credentials#9) — this construction is the one
+    # place in this codebase that imports af_credentials directly; every
+    # *downstream* use of `redeemer` (e.g. BrokerServiceXClientFactory's
+    # constructor) stays typed against the ServiceXRedeemer protocol instead.
+    redeemer: ServiceXRedeemer = ProxyClient(broker_url, kind="servicex")
 
     @asynccontextmanager
     async def _broker_lifespan(

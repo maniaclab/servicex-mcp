@@ -36,13 +36,11 @@ dependencies = [
   "uvicorn>=0.31.1",
   # Broker-mode client factory (BrokerServiceXClientFactory) redeems a
   # ServiceX access token from the AF MCP broker via ProxyClient's
-  # kind="servicex"/access_token() support (maniaclab/af-credentials#9,
-  # merged and tagged af-credentials v0.3.1 -- not yet built on conda-forge
-  # as of this writing, hence the structural-typing seam at server.py's
-  # construction site rather than a hard af_credentials.ProxyClient import
-  # there). Requires python>=3.11 (af-credentials' published conda-forge
-  # build's floor), which is why this project's own floor is 3.11 now.
-  "af-credentials>=0.3.0",
+  # kind="servicex"/access_token() support, which first shipped in
+  # af-credentials v0.3.1 (maniaclab/af-credentials#9) -- 0.3.0 predates it.
+  # Requires python>=3.11 (af-credentials' published conda-forge build's
+  # floor), which is why this project's own floor is 3.11 now.
+  "af-credentials>=0.3.1",
 ]
 
 [project.scripts]
