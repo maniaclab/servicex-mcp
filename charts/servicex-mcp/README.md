@@ -33,7 +33,7 @@ helm install servicex-mcp ./charts/servicex-mcp \
 | `auth.backendUrl`             | `""`    | Base URL of the ServiceX deployment this server talks to (required) |
 | `auth.resourceUrl`            | `""`    | Public URL of this server; derived from `ingress.host` if empty     |
 | `auth.brokerUrl`              | `""`    | AF MCP broker base URL; set to enable broker mode                   |
-| `servicexMcp.version`         | `0.1.2` | servicex-mcp release pinned into `pixi.toml`                        |
+| `servicexMcp.version`         | `0.1.3` | servicex-mcp release pinned into `pixi.toml`                        |
 | `servicexMcp.pixiLockContent` | `""`    | Frozen `pixi.lock` for reproducible installs (`--set-file`)         |
 | `readOnly`                    | `true`  | Disable write tools                                                 |
 | `ingress.host`                | `""`    | External hostname (required when `ingress.enabled`)                 |
