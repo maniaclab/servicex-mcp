@@ -1,11 +1,17 @@
 # servicex-mcp Helm chart
 
 Deploys [servicex-mcp](https://github.com/kratsg/servicex-mcp) over **HTTP
-transport** on Kubernetes. Each MCP client authenticates by pasting their own
-ServiceX personal refresh token through the server's `/bridge` interstitial (the
-CIMD OAuth bridge) the first time they connect -- no ServiceX credential lives
-in the pod, and there is exactly one auth model, unlike rucio-mcp's `auth.mode`
-(oidc / sharedSecret / broker).
+transport** on Kubernetes, in one of two modes selected by `auth.brokerUrl`:
+
+- **Standalone/bridge mode** (default, `auth.brokerUrl` empty): each MCP client
+  authenticates by pasting their own ServiceX personal refresh token through the
+  server's `/bridge` interstitial (the CIMD OAuth bridge) the first time they
+  connect -- no ServiceX credential lives in the pod. Needs a public Ingress.
+- **Broker mode** (`auth.brokerUrl` set): the server redeems ServiceX access
+  tokens from an [AF MCP broker](https://github.com/maniaclab/af-mcp-platform)
+  per call instead of running its own OAuth bridge; clients authenticate with an
+  AF Broker Identity Token. No public Ingress needed -- set
+  `ingress.enabled: false` and `auth.resourceUrl` explicitly.
 
 There is no published servicex-mcp container image: an init container runs the
 `ghcr.io/prefix-dev/pixi` image and installs the pinned `servicexMcp.version`
@@ -26,12 +32,28 @@ helm install servicex-mcp ./charts/servicex-mcp \
 | ----------------------------- | ------- | ------------------------------------------------------------------- |
 | `auth.backendUrl`             | `""`    | Base URL of the ServiceX deployment this server talks to (required) |
 | `auth.resourceUrl`            | `""`    | Public URL of this server; derived from `ingress.host` if empty     |
+| `auth.brokerUrl`              | `""`    | AF MCP broker base URL; set to enable broker mode                   |
 | `servicexMcp.version`         | `0.1.2` | servicex-mcp release pinned into `pixi.toml`                        |
 | `servicexMcp.pixiLockContent` | `""`    | Frozen `pixi.lock` for reproducible installs (`--set-file`)         |
 | `readOnly`                    | `true`  | Disable write tools                                                 |
 | `ingress.host`                | `""`    | External hostname (required when `ingress.enabled`)                 |
 
 See [`values.yaml`](values.yaml) for the full, documented set.
+
+## Broker mode
+
+```bash
+helm install servicex-mcp ./charts/servicex-mcp \
+  --namespace mcp --create-namespace \
+  --set ingress.enabled=false \
+  --set auth.backendUrl=https://servicex.af.uchicago.edu \
+  --set auth.resourceUrl=http://servicex-mcp.mcp.svc.cluster.local \
+  --set auth.brokerUrl=http://af-mcp-platform-broker.mcp.svc.cluster.local:8080
+```
+
+Requires `maniaclab/af-mcp-platform`'s `ServiceXTokenProvider` (redeeming
+against a deployed `servicex-token-service`) and an `aggregator.services` entry
+pointing at this deployment's in-cluster Service.
 
 ## Freezing the deployed version
 
