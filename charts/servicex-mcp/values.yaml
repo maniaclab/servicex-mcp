@@ -1,9 +1,19 @@
 # Default values for servicex-mcp.
-# This chart deploys servicex-mcp over HTTP transport, backed by the CIMD
-# OAuth bridge: each user pastes their own ServiceX personal refresh token
-# through the server's /bridge interstitial the first time they connect. The
-# server holds no ServiceX credential of its own, so there is no auth.mode
-# switch or shared-secret/broker config here (unlike rucio-mcp's chart).
+# This chart deploys servicex-mcp over HTTP transport, in one of two modes
+# (see auth.brokerUrl below):
+#   - standalone/bridge mode (default, auth.brokerUrl empty): backed by the
+#     CIMD OAuth bridge -- each user pastes their own ServiceX personal
+#     refresh token through the server's /bridge interstitial the first time
+#     they connect. The server holds no ServiceX credential of its own.
+#     Needs a public Ingress.
+#   - broker mode (auth.brokerUrl set): the server registers no OAuth 2.1
+#     authorization server of its own and instead redeems ServiceX access
+#     tokens from an AF MCP broker (maniaclab/af-mcp-platform) per call, via
+#     POST {auth.brokerUrl}/v1/credentials/servicex/redeem. Callers
+#     authenticate with an AF Broker Identity Token, not a ServiceX personal
+#     refresh token. No public Ingress needed -- set ingress.enabled: false
+#     and auth.resourceUrl explicitly to your own in-cluster Service URL
+#     (there is no public hostname to derive it from in this mode).
 
 # -- Container image. There is no published servicex-mcp image; the chart runs
 # the prefix-dev pixi image and installs servicex-mcp at pod startup (see
@@ -19,7 +29,7 @@ imagePullSecrets: []
 servicexMcp:
   # Conda-forge version of servicex-mcp to install (==<version>). Placeholder
   # until the first release is published to conda-forge.
-  version: "0.1.0"
+  version: "0.1.3"
   # Extra conda-forge dependencies merged into the rendered pixi.toml, as a
   # name -> version-spec map.
   extraPixiDependencies: {}
@@ -49,10 +59,17 @@ server:
 auth:
   # Base URL of the ServiceX deployment this server talks to (required).
   backendUrl: ""
-  # Public URL clients reach this server at; used to build OAuth redirect URIs
-  # and the DNS-rebinding protection allow-list. If empty, derived as
-  # https://<ingress.host>.
+  # Public URL clients reach this server at; used to build the DNS-rebinding
+  # protection allow-list (and, in bridge mode, OAuth redirect URIs). If
+  # empty, derived as https://<ingress.host> -- which only works when
+  # ingress.host is actually set, so broker-mode deployments (no Ingress)
+  # must set this explicitly.
   resourceUrl: ""
+  # Base URL of an AF MCP broker (maniaclab/af-mcp-platform), e.g.
+  # "http://af-mcp-platform-broker.mcp.svc.cluster.local:8080". Empty
+  # (default): standalone/bridge mode. Set: broker mode -- passed through
+  # verbatim as `servicex-mcp serve --broker-url`.
+  brokerUrl: ""
 
 # -- Extra environment variables for the main container (free-form list of
 # corev1.EnvVar).

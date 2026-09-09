@@ -10,6 +10,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 from starlette.testclient import TestClient
 
+from servicex_mcp.auth.factory import BrokerServiceXClientFactory
 from servicex_mcp.server import (
     _AuthorizeContextMiddleware,
     _CimdMetadataMiddleware,
@@ -279,6 +280,75 @@ class TestHttpLifespanCleanup:
         ):
             pass
         mock_close.assert_called_once()
+
+
+class TestBrokerMode:
+    """--broker-url wiring (BrokerServiceXClientFactory, maniaclab/af-mcp-platform#295)."""
+
+    def test_broker_mode_builds_mcp_with_no_oauth_provider(self) -> None:
+        # Broker mode runs no OAuth 2.1 authorization server of its own —
+        # the AF MCP broker's aggregator already authenticated the caller.
+        mcp, provider = _make_http_mcp(
+            backend_url="https://servicex.example.com",
+            resource_url=_RESOURCE_URL,
+            broker_url="https://mcp.af.uchicago.edu",
+            read_only=False,
+            cache_dir="/tmp/servicex_mcp_cache_test",
+        )
+        assert provider is None
+        assert mcp is not None
+
+    async def test_broker_mode_lifespan_uses_broker_factory(self) -> None:
+        mcp, _provider = _make_http_mcp(
+            backend_url="https://servicex.example.com",
+            resource_url=_RESOURCE_URL,
+            broker_url="https://mcp.af.uchicago.edu",
+            read_only=True,
+            cache_dir="/tmp/servicex_mcp_cache_test",
+        )
+        assert mcp.settings.lifespan is not None
+        async with mcp.settings.lifespan(mcp) as context:
+            assert isinstance(context["client_factory"], BrokerServiceXClientFactory)
+            assert context["read_only"] is True
+
+    def test_broker_mode_registers_same_tools_as_bridge_mode(self) -> None:
+        bridge_mcp, _ = _make_http_mcp(
+            backend_url="https://servicex.example.com",
+            resource_url=_RESOURCE_URL,
+            read_only=False,
+            cache_dir="/tmp/servicex_mcp_cache_test",
+        )
+        broker_mcp, _ = _make_http_mcp(
+            backend_url="https://servicex.example.com",
+            resource_url=_RESOURCE_URL,
+            broker_url="https://mcp.af.uchicago.edu",
+            read_only=False,
+            cache_dir="/tmp/servicex_mcp_cache_test",
+        )
+        bridge_names = {tool.name for tool in bridge_mcp._tool_manager.list_tools()}
+        broker_names = {tool.name for tool in broker_mcp._tool_manager.list_tools()}
+        assert bridge_names == broker_names
+
+    def test_serve_http_forwards_broker_url(self) -> None:
+        with (
+            patch("servicex_mcp.server.uvicorn.run"),
+            patch(
+                "servicex_mcp.server._make_http_mcp",
+                wraps=None,
+            ) as mock_make,
+        ):
+            mock_make.side_effect = lambda **_kw: (MagicMock(), None)
+            serve_http(
+                backend_url="https://servicex.example.com",
+                resource_url="https://servicex-mcp.example.org",
+                broker_url="https://mcp.af.uchicago.edu",
+                host="127.0.0.1",
+                port=8000,
+                read_only=False,
+                cache_dir="/tmp/servicex_mcp_cache_test",
+            )
+        mock_make.assert_called_once()
+        assert mock_make.call_args.kwargs["broker_url"] == "https://mcp.af.uchicago.edu"
 
 
 class TestServeHttp:

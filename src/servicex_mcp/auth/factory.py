@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import time
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from servicex.configuration import Configuration
 from servicex.query_cache import QueryCache
@@ -14,6 +14,34 @@ from servicex.servicex_client import ServiceXClient
 
 if TYPE_CHECKING:
     from servicex_mcp.auth.session_cache import SessionCache
+
+
+class _RedeemedAccessToken(Protocol):
+    """Structural shape of a redeemed ServiceX access token.
+
+    A read-only property, not a plain attribute: a plain ``access_token:
+    str`` annotation would require write access too (PEP 544's default for
+    protocol attributes), which af-credentials' actual ``ServiceXAccessToken``
+    -- a frozen dataclass -- cannot satisfy.
+    """
+
+    @property
+    def access_token(self) -> str: ...
+
+
+class ServiceXRedeemer(Protocol):
+    """Redeems a ServiceX access token from the AF MCP broker for a given bearer.
+
+    Matches ``af_credentials.proxy.ProxyClient``'s ``kind="servicex"``
+    support (maniaclab/af-credentials#9, shipped in af-credentials v0.3.1)
+    via structural typing rather than a hard import: ``ProxyClient(broker_url,
+    kind="servicex")`` satisfies this protocol directly, but the one concrete
+    construction site lives in ``server.py``, keeping this module's tests
+    independent of af-credentials being installed at all.
+    """
+
+    async def access_token(self, bearer: str) -> _RedeemedAccessToken:
+        """Redeem *bearer* (an AF Broker Identity Token) for a ServiceX access token."""
 
 
 class ServiceXClientFactory(ABC):
@@ -78,6 +106,64 @@ def build_http_servicex_client(
     return client
 
 
+class _BrokerServiceXAdapter(ServiceXAdapter):  # type: ignore[misc]
+    """A ServiceXAdapter that redeems its access token from the AF MCP broker instead of exchanging a ServiceX refresh token via ServiceX's own /token/refresh.
+
+    ``# type: ignore[misc]`` above: ``servicex`` ships no type stubs
+    (``ignore_missing_imports`` for ``servicex.*`` in ``pyproject.toml``),
+    so mypy sees ``ServiceXAdapter`` as ``Any`` and flags subclassing it —
+    a real constraint of this codebase's typing setup, not specific to this
+    class.
+
+    Only ``_get_token`` is overridden — ``_get_authorization``'s existing
+    JWT-expiry-aware fast path (serve ``self.token`` while its own ``exp``
+    claim leaves more than 60s, else re-authenticate) is untouched, so this
+    adapter re-redeems exactly as often as the stock refresh-token path
+    would re-call ``/token/refresh``: lazily, on first real use and
+    whenever the cached access token is about to expire.
+
+    ``bearer`` (the caller's AF Broker Identity Token) is stored in the
+    base class's ``refresh_token`` slot. That is deliberate, not an
+    oversight: ``_get_authorization``'s ``if not bearer_token and not
+    self.refresh_token: return {}`` guard needs *something* truthy there to
+    ever attempt authentication at all, and this is the only value this
+    adapter has to offer it. The base class's own ``_get_token`` (which
+    would POST that value to ServiceX's ``/token/refresh``) is never
+    reached — it is fully replaced below.
+    """
+
+    def __init__(self, url: str, *, redeemer: ServiceXRedeemer, bearer: str) -> None:
+        """Construct against *url*, redeeming *bearer* via *redeemer* on demand."""
+        super().__init__(url, refresh_token=bearer)
+        self._redeemer = redeemer
+
+    async def _get_token(self) -> None:
+        """Redeem the stored bearer via the broker and store the resulting access token."""
+        token = await self._redeemer.access_token(self.refresh_token)
+        self.token = token.access_token
+
+
+def build_broker_servicex_client(
+    *, url: str, redeemer: ServiceXRedeemer, bearer: str, cache_dir: str
+) -> ServiceXClient:
+    """Build a ServiceXClient whose adapter redeems its access token from the AF MCP broker.
+
+    Mirrors ``build_http_servicex_client``'s ``object.__new__`` construction
+    exactly, substituting ``_BrokerServiceXAdapter`` for the plain
+    ``ServiceXAdapter`` — see that function's docstring for why this
+    bypasses ``ServiceXClient.__init__`` entirely, and re-check both against
+    ``ServiceXClient.__init__`` on any ``servicex`` version bump.
+    """
+    client = object.__new__(ServiceXClient)
+    config = Configuration(api_endpoints=[], cache_path=cache_dir)
+    client.config = config
+    client.endpoints = {}
+    client.servicex = _BrokerServiceXAdapter(url, redeemer=redeemer, bearer=bearer)
+    client.query_cache = QueryCache(config)
+    client._code_generators = None  # pylint: disable=protected-access
+    return client
+
+
 def _extract_request_auth(ctx: Any) -> tuple[str, str]:
     """Extract (session_id, bearer_token) from the request."""
     req = ctx.request_context.request
@@ -134,6 +220,66 @@ class BearerTokenClientFactory(ServiceXClientFactory):
             return cached
         client = build_http_servicex_client(
             url=self._backend_url, refresh_token=bearer, cache_dir=self._cache_dir
+        )
+        if cache_key:
+            self._cache.put(cache_key, client, time.time() + 300)
+        return client
+
+    def close(self) -> None:
+        """Evict all cached clients."""
+        self._cache.close()
+
+
+class BrokerServiceXClientFactory(ServiceXClientFactory):
+    """Broker-mode HTTP factory: builds and caches one broker-backed ServiceXClient per MCP session.
+
+    The client bearer this factory extracts is an AF Broker Identity Token
+    (forwarded by the af-mcp-broker aggregator, which already authenticated
+    the caller), not a ServiceX personal refresh token — the actual
+    ServiceX access token is redeemed from the broker's own
+    ``POST /v1/credentials/servicex/redeem`` (maniaclab/af-mcp-platform#295)
+    via *redeemer*, lazily, the first time the returned client makes a real
+    ServiceX call (see ``_BrokerServiceXAdapter``). *redeemer* is injected
+    rather than constructed here so this class stays independent of
+    af-credentials' concrete ``ProxyClient``, whose ``kind="servicex"``
+    support is still landing (maniaclab/af-credentials#9) — the caller
+    (``server.py``) wires the concrete redeemer.
+    """
+
+    def __init__(
+        self,
+        *,
+        cache: SessionCache,
+        redeemer: ServiceXRedeemer,
+        backend_url: str,
+        cache_dir: str,
+    ) -> None:
+        """Store the session cache, redeemer, backend URL, and download cache directory."""
+        self._cache = cache
+        self._redeemer = redeemer
+        self._backend_url = backend_url
+        self._cache_dir = cache_dir
+
+    def get_client(self, ctx: Any) -> ServiceXClient:
+        """Return a cached or newly built ServiceXClient for this session.
+
+        Mirrors ``BearerTokenClientFactory.get_client`` exactly (same
+        cache-key binding, same fixed 300s session TTL) — no redeem call
+        happens here. The difference is entirely inside the adapter:
+        ``_BrokerServiceXAdapter`` redeems from the broker on first real use
+        and whenever its cached access token nears its own expiry, rather
+        than exchanging a refresh token with ServiceX directly.
+        """
+        session_id, bearer = _extract_request_auth(ctx)
+        cache_key = _cache_key(session_id, bearer) if session_id else None
+        cached = self._cache.get(cache_key) if cache_key else None
+        if cached is not None:
+            return cached
+        client = build_broker_servicex_client(
+            url=self._backend_url,
+            redeemer=self._redeemer,
+            bearer=bearer,
+            cache_dir=self._cache_dir,
         )
         if cache_key:
             self._cache.put(cache_key, client, time.time() + 300)

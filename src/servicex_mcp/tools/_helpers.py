@@ -94,7 +94,29 @@ def classify_error(exc: Exception) -> str:
     msg_lower = exc_msg.lower()
     type_lower = exc_type.lower()
 
-    if "authorizationerror" in type_lower or "not authorized" in msg_lower:
+    if "proxynotavailableerror" in type_lower:
+        # Broker-mode only (BrokerServiceXClientFactory / _BrokerServiceXAdapter):
+        # raised when the AF MCP broker has no linked ServiceX refresh token
+        # for this caller (maniaclab/af-mcp-platform#295). Checked before the
+        # generic authorizationerror/"not authorized" branch below since its
+        # guidance ("re-paste a refresh token into this server's own bridge")
+        # would be actively wrong here -- the caller never has ServiceX
+        # credentials of its own in broker mode at all.
+        guidance = (
+            "No ServiceX credential is linked for you at the Analysis "
+            "Facility broker. Link your ServiceX personal refresh token via "
+            "the broker portal, then retry."
+        )
+    elif "proxyredeemerror" in type_lower:
+        # Broker-mode only: the broker or servicex-token-service call itself
+        # failed for an infra reason (distinct from "nothing is linked" above).
+        guidance = (
+            "The Analysis Facility broker failed to redeem your ServiceX "
+            "credential -- this may be transient. Use `servicex_info` to "
+            "check connectivity and try again, or contact your Analysis "
+            "Facility operator if it persists."
+        )
+    elif "authorizationerror" in type_lower or "not authorized" in msg_lower:
         guidance = (
             "Not authorized to access this ServiceX instance. "
             "Use `servicex_info` to check connectivity, and confirm your "

@@ -61,6 +61,17 @@ def main() -> None:
         metavar="URL",
         help="Public URL of this MCP server (required for --transport http).",
     )
+    serve_parser.add_argument(
+        "--broker-url",
+        default=None,
+        metavar="URL",
+        help="Base URL of an AF MCP broker (maniaclab/af-mcp-platform). When "
+        "set, --transport http runs in broker mode: clients authenticate "
+        "with an AF Broker Identity Token (not a ServiceX personal refresh "
+        "token), redeemed for a ServiceX access token via the broker's "
+        "POST /v1/credentials/servicex/redeem. Requires "
+        "maniaclab/af-mcp-platform's ServiceXTokenProvider (issue #295).",
+    )
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
     serve_parser.add_argument(
@@ -92,6 +103,7 @@ def main() -> None:
             serve_http(
                 backend_url=args.backend_url,
                 resource_url=args.resource_url,
+                broker_url=args.broker_url,
                 host=args.host,
                 port=args.port,
                 read_only=args.read_only,
