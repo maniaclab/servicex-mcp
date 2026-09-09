@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from af_credentials.proxy import ProxyNotAvailableError, ProxyRedeemError
+
 from servicex_mcp.auth.factory import EnvBasedClientFactory
 from servicex_mcp.tools._helpers import (
     _format_markdown_table,
@@ -298,6 +300,17 @@ class TestClassifyError:
         result = classify_error(Exception("something completely unexpected"))
         assert result == "Error: something completely unexpected"
         assert "Recovery" not in result
+
+    def test_proxy_not_available_error_category(self) -> None:
+        result = classify_error(ProxyNotAvailableError("no linked credential"))
+        assert result.startswith("Error: no linked credential")
+        assert "**Recovery:**" in result
+        assert "link" in result.lower()
+
+    def test_proxy_redeem_error_category(self) -> None:
+        result = classify_error(ProxyRedeemError(502, "broker unreachable"))
+        assert "**Recovery:**" in result
+        assert "servicex_info" in result
 
 
 class TestCheckWriteAllowed:

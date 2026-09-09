@@ -35,6 +35,12 @@ dependencies = [
   "pydantic>=2.11",
   "starlette>=0.27",
   "uvicorn>=0.31.1",
+  # Broker-mode client factory (BrokerServiceXClientFactory) redeems a
+  # ServiceX access token from the AF MCP broker via ProxyClient. Only
+  # ProxyClient's generic x509/krb5 machinery is used at this version --
+  # its ServiceX-specific kind="servicex"/access_token() support is still
+  # landing (maniaclab/af-credentials#9); see server.py's construction site.
+  "af-credentials>=0.3.0",
 ]
 
 [project.scripts]

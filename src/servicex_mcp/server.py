@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qs, urlparse
 
 import uvicorn
+from af_credentials.proxy import ProxyClient
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -22,7 +23,14 @@ from servicex_mcp.auth.bridge_provider import (
     _authorize_redirect_uri,
 )
 from servicex_mcp.auth.bridge_routes import register_bridge_routes
-from servicex_mcp.auth.factory import BearerTokenClientFactory, EnvBasedClientFactory
+from servicex_mcp.auth.factory import (  # pylint: disable=unused-import
+    BearerTokenClientFactory,
+    BrokerServiceXClientFactory,
+    EnvBasedClientFactory,
+    # Used only inside cast("ServiceXRedeemer", ...) below -- pylint's
+    # unused-import check doesn't see string-quoted cast() type args.
+    ServiceXRedeemer,
+)
 from servicex_mcp.auth.session_cache import SessionCache
 from servicex_mcp.tools import datasets, info, submit, transforms
 
@@ -197,10 +205,86 @@ def _transport_security_from_resource_url(
     )
 
 
+def _make_broker_http_mcp(
+    *, backend_url: str, broker_url: str, read_only: bool, cache_dir: str
+) -> MCPServer:
+    """Build the MCPServer instance for HTTP transport in broker mode.
+
+    Unlike bridge mode (below), this server runs no OAuth 2.1 authorization
+    server of its own and registers no /bridge routes: the AF MCP broker's
+    aggregator already authenticated the caller and forwards an AF Broker
+    Identity Token as this request's own bearer — the same shape every
+    other broker-mediated backend in that platform relies on (see
+    maniaclab/af-mcp-platform#295). resource_url-derived transport security
+    (DNS-rebinding protection) still applies uniformly in serve_http,
+    independent of this OAuth-provider distinction.
+
+    The concrete redeemer is constructed here, not in auth/factory.py, so
+    that module stays independent of af-credentials' release status — see
+    BrokerServiceXClientFactory's docstring.
+    """
+    cache = SessionCache()
+    # kind="servicex" and access_token() are not in any released af-credentials
+    # version yet (maniaclab/af-credentials#9) — this construction is the one
+    # place in this codebase that depends on that unreleased interface. The
+    # cast, not just a bare instance, keeps every *downstream* use of
+    # `redeemer` (e.g. BrokerServiceXClientFactory's constructor) clean —
+    # only this one line needs to know ProxyClient doesn't structurally
+    # satisfy ServiceXRedeemer yet.
+    redeemer = cast(
+        "ServiceXRedeemer",
+        ProxyClient(broker_url, kind="servicex"),  # type: ignore[arg-type]
+    )
+
+    @asynccontextmanager
+    async def _broker_lifespan(
+        _server: MCPServer,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        factory = BrokerServiceXClientFactory(
+            cache=cache, redeemer=redeemer, backend_url=backend_url, cache_dir=cache_dir
+        )
+        try:
+            yield {"client_factory": factory, "read_only": read_only}
+        finally:
+            factory.close()
+
+    mcp = MCPServer(
+        "servicex-mcp",
+        instructions=_HTTP_PREAMBLE,
+        lifespan=_broker_lifespan,
+    )
+
+    for _module in [info, transforms, datasets, submit]:
+        _module.register(mcp)
+
+    return mcp
+
+
 def _make_http_mcp(
-    *, backend_url: str, resource_url: str, read_only: bool, cache_dir: str
-) -> tuple[MCPServer, ServiceXBridgeProvider]:
-    """Build the MCPServer instance for HTTP transport."""
+    *,
+    backend_url: str,
+    resource_url: str,
+    read_only: bool,
+    cache_dir: str,
+    broker_url: str | None = None,
+) -> tuple[MCPServer, ServiceXBridgeProvider | None]:
+    """Build the MCPServer instance for HTTP transport.
+
+    *broker_url*, when given, selects broker mode (see
+    ``_make_broker_http_mcp``) — the returned provider is ``None`` since
+    broker mode registers no OAuth 2.1 authorization server of its own.
+    """
+    if broker_url is not None:
+        return (
+            _make_broker_http_mcp(
+                backend_url=backend_url,
+                broker_url=broker_url,
+                read_only=read_only,
+                cache_dir=cache_dir,
+            ),
+            None,
+        )
+
     provider = ServiceXBridgeProvider(
         backend_url=backend_url, resource_url=resource_url
     )
@@ -248,6 +332,7 @@ def serve_http(
     read_only: bool,
     cache_dir: str,
     log_level: str = "info",
+    broker_url: str | None = None,
 ) -> None:
     """Entry point used by the CLI's `serve --transport http` path."""
     mcp, _provider = _make_http_mcp(
@@ -255,6 +340,7 @@ def serve_http(
         resource_url=resource_url,
         read_only=read_only,
         cache_dir=cache_dir,
+        broker_url=broker_url,
     )
     http_app = mcp.streamable_http_app(
         transport_security=_transport_security_from_resource_url(resource_url)

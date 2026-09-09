@@ -232,6 +232,60 @@ class TestCLIServe:
         assert captured["port"] == 9000
         assert captured["cache_dir"] == "/var/tmp/cache"
 
+    def test_broker_url_defaults_to_none(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_serve_http(**kwargs: object) -> None:
+            captured.update(kwargs)
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "servicex-mcp",
+                    "serve",
+                    "--transport",
+                    "http",
+                    "--backend-url",
+                    "https://servicex.example.com",
+                    "--resource-url",
+                    "http://localhost:8000",
+                ],
+            ),
+            patch("servicex_mcp.cli.serve_http", fake_serve_http),
+        ):
+            main()
+
+        assert captured["broker_url"] is None
+
+    def test_broker_url_flag_forwarded_to_serve_http(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_serve_http(**kwargs: object) -> None:
+            captured.update(kwargs)
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "servicex-mcp",
+                    "serve",
+                    "--transport",
+                    "http",
+                    "--backend-url",
+                    "https://servicex.example.com",
+                    "--resource-url",
+                    "http://localhost:8000",
+                    "--broker-url",
+                    "https://mcp.af.uchicago.edu",
+                ],
+            ),
+            patch("servicex_mcp.cli.serve_http", fake_serve_http),
+        ):
+            main()
+
+        assert captured["broker_url"] == "https://mcp.af.uchicago.edu"
+
     def test_transport_rejects_invalid_value(self) -> None:
         with (
             patch("sys.argv", ["servicex-mcp", "serve", "--transport", "bogus"]),
