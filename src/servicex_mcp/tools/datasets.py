@@ -55,8 +55,11 @@ def _dataset_to_dict(d: CachedDataset) -> dict[str, Any]:
 
 
 def register(mcp: MCPServer) -> None:
-    """Register servicex_list_datasets, servicex_get_dataset, and
-    servicex_delete_dataset."""
+    """Register the dataset-related MCP tools.
+
+    Registers servicex_list_datasets, servicex_get_dataset, and
+    servicex_delete_dataset.
+    """
 
     @mcp.tool()
     async def servicex_list_datasets(

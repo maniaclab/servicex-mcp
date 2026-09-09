@@ -361,7 +361,7 @@ class ServiceXBridgeProvider:
         _client: OAuthClientInformationFull,
         _params: IdentityAssertionParams,
     ) -> OAuthToken:
-        """The SEP-990 ID-JAG/jwt-bearer grant is not supported; always raises.
+        """Reject the SEP-990 ID-JAG/jwt-bearer grant, which is not supported.
 
         Required to satisfy OAuthAuthorizationServerProvider's structural
         protocol even though this provider doesn't inherit from it directly

@@ -49,8 +49,11 @@ def _transform_to_dict(t: TransformStatus) -> dict[str, Any]:
 
 
 def register(mcp: MCPServer) -> None:
-    """Register servicex_list_transforms, servicex_get_transform_status,
-    servicex_cancel_transform, and servicex_delete_transform."""
+    """Register the transform-related MCP tools.
+
+    Registers servicex_list_transforms, servicex_get_transform_status,
+    servicex_cancel_transform, and servicex_delete_transform.
+    """
 
     @mcp.tool()
     async def servicex_list_transforms(
