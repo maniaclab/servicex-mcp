@@ -90,7 +90,10 @@ def classify_error(exc: Exception) -> str:
     specific recovery steps rather than a bare traceback string.
     """
     exc_type = type(exc).__name__
-    exc_msg = str(exc)
+    # A bare exception (e.g. a ProxyClient redeem call raising a timeout with
+    # no message) has an empty str(exc) -- fall back to the type name so the
+    # caller sees *something* happened instead of a blank "Error: " message.
+    exc_msg = str(exc) or exc_type
     msg_lower = exc_msg.lower()
     type_lower = exc_type.lower()
 

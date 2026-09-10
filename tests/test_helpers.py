@@ -296,10 +296,23 @@ class TestClassifyError:
         assert "**Recovery:**" in result
         assert "servicex_info" in result
 
+    def test_blank_message_falls_back_to_exception_type_name(self) -> None:
+        # A bare TimeoutError() (e.g. from a broker redeem call exceeding
+        # ProxyClient's timeout) has an empty str(exc); the displayed error
+        # must still say *something* happened, not "Error: \n\n**Recovery:**...".
+        result = classify_error(TimeoutError())
+        assert result.startswith("Error: TimeoutError")
+
     def test_other_category_has_no_recovery_block(self) -> None:
         result = classify_error(Exception("something completely unexpected"))
         assert result == "Error: something completely unexpected"
         assert "Recovery" not in result
+
+    def test_other_category_blank_message_falls_back_to_exception_type_name(
+        self,
+    ) -> None:
+        result = classify_error(Exception())
+        assert result == "Error: Exception"
 
     def test_proxy_not_available_error_category(self) -> None:
         result = classify_error(ProxyNotAvailableError("no linked credential"))
