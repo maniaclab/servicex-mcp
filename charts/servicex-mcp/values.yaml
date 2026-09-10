@@ -29,7 +29,7 @@ imagePullSecrets: []
 servicexMcp:
   # Conda-forge version of servicex-mcp to install (==<version>). Placeholder
   # until the first release is published to conda-forge.
-  version: "0.1.3"
+  version: "0.1.4"
   # Extra conda-forge dependencies merged into the rendered pixi.toml, as a
   # name -> version-spec map.
   extraPixiDependencies: {}
