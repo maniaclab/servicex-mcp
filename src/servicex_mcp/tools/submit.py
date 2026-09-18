@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer  # noqa: TC002
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import BaseModel
 from servicex.dataset_identifier import (
     CERNOpenDataDatasetIdentifier,
     DataSetIdentifier,
@@ -23,6 +25,12 @@ from servicex_mcp.tools._helpers import (
 
 DatasetKind = Literal["rucio", "file_list", "xrootd", "cernopendata"]
 ResultFormatName = Literal["parquet", "root-file", "root-rntuple"]
+
+
+class ServicexSubmitQueryResult(BaseModel):
+    """Structured result of ``servicex_submit_query``."""
+
+    request_id: str
 
 
 def _build_dataset_identifier(
@@ -50,7 +58,12 @@ def _build_dataset_identifier(
 def register(mcp: MCPServer) -> None:
     """Register the query-submission tool with the MCP server."""
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Submit query",
+            read_only_hint=False,
+        )
+    )
     async def servicex_submit_query(
         dataset: str,
         dataset_kind: DatasetKind,
@@ -61,7 +74,7 @@ def register(mcp: MCPServer) -> None:
         num_files: int | None = None,
         *,
         ctx: Context[Any, Any],
-    ) -> str:
+    ) -> Annotated[CallToolResult, ServicexSubmitQueryResult]:
         """Submit a new transform request against a dataset.
 
         `dataset_kind` selects how `dataset` is interpreted:
@@ -89,7 +102,7 @@ def register(mcp: MCPServer) -> None:
             dsid = _build_dataset_identifier(dataset, dataset_kind, num_files)
             fmt = ResultFormat(result_format)
         except ValueError as exc:
-            return f"Error: {exc}"
+            return classify_error(exc)
 
         try:
             client = get_servicex_client(ctx)
@@ -118,4 +131,9 @@ def register(mcp: MCPServer) -> None:
                 )
             ]
         )
-        return f"Submitted transform. **request_id:** {request_id}" + hints
+        text = f"Submitted transform. **request_id:** {request_id}" + hints
+        payload = ServicexSubmitQueryResult(request_id=request_id)
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)],
+            structured_content=payload.model_dump(mode="json"),
+        )

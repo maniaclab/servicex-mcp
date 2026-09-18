@@ -19,6 +19,8 @@ from servicex_mcp.tools.submit import _build_dataset_identifier, register
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from mcp.types import CallToolResult
+
 
 class TestBuildDatasetIdentifier:
     def test_rucio(self) -> None:
@@ -67,7 +69,7 @@ class TestBuildDatasetIdentifier:
 
 
 @pytest.fixture
-def registered_tools() -> dict[str, Callable[..., Awaitable[str]]]:
+def registered_tools() -> dict[str, Callable[..., Awaitable[CallToolResult]]]:
     mcp = MCPServer("test")
     register(mcp)
     return {tool.name: tool.fn for tool in mcp._tool_manager.list_tools()}
@@ -76,9 +78,10 @@ def registered_tools() -> dict[str, Callable[..., Awaitable[str]]]:
 class TestServicexSubmitQuery:
     async def test_submits_rucio_dataset_and_returns_request_id(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_query = MagicMock()
         mock_query.servicex.submit_transform = AsyncMock(return_value="req-123")
@@ -92,26 +95,31 @@ class TestServicexSubmitQuery:
             codegen="atlasr22",
             ctx=mock_ctx,
         )
-        assert "req-123" in result
+        text = tool_text(result)
+        assert "req-123" in text
+        assert result.structured_content == {"request_id": "req-123"}
         mock_servicex_client.generic_query.assert_called_once()
         call_kwargs = mock_servicex_client.generic_query.call_args.kwargs
         assert call_kwargs["codegen"] == "atlasr22"
 
     async def test_rejects_unknown_dataset_kind(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         fn = registered_tools["servicex_submit_query"]
         result = await fn(
             dataset="x", dataset_kind="not-a-kind", query="q", codegen="c", ctx=mock_ctx
         )
-        assert result.startswith("Error:")
+        assert tool_text(result).startswith("Error:")
+        assert result.is_error is True
 
     async def test_rejects_unknown_result_format(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         fn = registered_tools["servicex_submit_query"]
         result = await fn(
@@ -122,12 +130,14 @@ class TestServicexSubmitQuery:
             result_format="xml",
             ctx=mock_ctx,
         )
-        assert result.startswith("Error:")
+        assert tool_text(result).startswith("Error:")
+        assert result.is_error is True
 
     async def test_read_only_mode_blocks_submission(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx_readonly: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         fn = registered_tools["servicex_submit_query"]
         result = await fn(
@@ -137,13 +147,15 @@ class TestServicexSubmitQuery:
             codegen="c",
             ctx=mock_ctx_readonly,
         )
-        assert "read-only" in result.lower()
+        assert "read-only" in tool_text(result).lower()
+        assert result.is_error is True
 
     async def test_returns_error_on_submit_failure(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_query = MagicMock()
         mock_query.servicex.submit_transform = AsyncMock(
@@ -154,4 +166,5 @@ class TestServicexSubmitQuery:
         result = await fn(
             dataset="x", dataset_kind="rucio", query="q", codegen="c", ctx=mock_ctx
         )
-        assert result.startswith("Error:")
+        assert tool_text(result).startswith("Error:")
+        assert result.is_error is True
