@@ -81,7 +81,18 @@ packages = ["src/servicex_mcp"]
 minversion = "9.0"
 addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
 strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+  "error",
+  # anyio >=4.15 deprecates the anyio.abc.BlockingPortal re-export in favor of
+  # anyio.from_thread.BlockingPortal. starlette 1.6.0's own testclient.py
+  # still imports the old alias internally (`import anyio.abc` /
+  # `anyio.abc.BlockingPortal`), so every wire-level test that imports
+  # starlette.testclient trips this the moment anyio >4.14 is resolved --
+  # which the mcp 2.2.0 lock bump forces in this repo's dependency graph.
+  # Nothing in servicex-mcp touches the deprecated alias directly; this is
+  # starlette's fix to make, not ours.
+  "ignore:The anyio\\.abc\\.BlockingPortal alias is deprecated.*:DeprecationWarning",
+]
 log_level = "INFO"
 testpaths = ["tests"]
 markers = [
@@ -98,6 +109,7 @@ report.exclude_also = [
 
 [tool.mypy]
 files = ["src", "tests"]
+mypy_path = ["src"]
 python_version = "3.11"
 warn_unused_configs = true
 strict = true
