@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from mcp.server.mcpserver import Context, MCPServer  # noqa: TC002
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import BaseModel
 
 from servicex_mcp.tools._helpers import (
     build_hints,
@@ -54,6 +56,37 @@ def _dataset_to_dict(d: CachedDataset) -> dict[str, Any]:
     }
 
 
+class DatasetInfo(BaseModel):
+    """Structured detail of one cached dataset, matching ``_dataset_to_dict``."""
+
+    id: int
+    name: str
+    did_finder: str | None
+    n_files: int | None
+    size: int | None
+    events: int | None
+    lookup_status: str | None
+    is_stale: bool | None
+    last_used: str | None
+    last_updated: str | None
+
+
+class ServicexListDatasetsResult(BaseModel):
+    """Structured result of ``servicex_list_datasets``."""
+
+    datasets: list[DatasetInfo]
+    offset: int
+    limit: int
+    truncated: bool
+
+
+class ServicexDeleteDatasetResult(BaseModel):
+    """Structured result of ``servicex_delete_dataset``."""
+
+    dataset_id: int
+    stale: bool
+
+
 def register(mcp: MCPServer) -> None:
     """Register the dataset-related MCP tools.
 
@@ -61,7 +94,13 @@ def register(mcp: MCPServer) -> None:
     servicex_delete_dataset.
     """
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="List datasets",
+            read_only_hint=True,
+            open_world_hint=True,
+        )
+    )
     async def servicex_list_datasets(
         did_finder: str | None = None,
         show_deleted: bool = False,
@@ -69,7 +108,7 @@ def register(mcp: MCPServer) -> None:
         offset: int = 0,
         *,
         ctx: Context[Any, Any],
-    ) -> str:
+    ) -> Annotated[CallToolResult, ServicexListDatasetsResult]:
         """List datasets cached on this ServiceX instance.
 
         Shows file/event counts and cache status for each dataset. Use
@@ -87,21 +126,45 @@ def register(mcp: MCPServer) -> None:
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
         if not datasets:
-            return "No datasets found."
+            payload = ServicexListDatasetsResult(
+                datasets=[], offset=offset, limit=limit, truncated=False
+            )
+            return CallToolResult(
+                content=[TextContent(type="text", text="No datasets found.")],
+                structured_content=payload.model_dump(mode="json"),
+            )
         rows, footer = paginate_iter(
             (_dataset_to_dict(d) for d in datasets), limit, offset
         )
         hints = build_hints(
             ["Use `servicex_get_dataset` with a dataset_id for full detail"]
         )
-        return (
+        text = (
             format_list(rows, include_keys=_DATASET_KEYS, byte_keys=_BYTE_KEYS)
             + footer
             + hints
         )
+        payload = ServicexListDatasetsResult(
+            datasets=[DatasetInfo(**row) for row in rows],
+            offset=offset,
+            limit=limit,
+            truncated=bool(footer),
+        )
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)],
+            structured_content=payload.model_dump(mode="json"),
+        )
 
-    @mcp.tool()
-    async def servicex_get_dataset(dataset_id: int, *, ctx: Context[Any, Any]) -> str:
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Get dataset",
+            read_only_hint=True,
+            open_world_hint=True,
+        )
+    )
+    async def servicex_get_dataset(
+        dataset_id: int, *, ctx: Context[Any, Any]
+    ) -> Annotated[CallToolResult, DatasetInfo]:
         """Get the full detail of one cached dataset by its dataset ID."""
         try:
             client = get_servicex_client(ctx)
@@ -113,12 +176,23 @@ def register(mcp: MCPServer) -> None:
         hints = build_hints(
             ["Use `servicex_delete_dataset` to remove this dataset from the cache"]
         )
-        return format_dict(_dataset_to_dict(d), byte_keys=_BYTE_KEYS) + hints
+        text = format_dict(_dataset_to_dict(d), byte_keys=_BYTE_KEYS) + hints
+        payload = DatasetInfo(**_dataset_to_dict(d))
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)],
+            structured_content=payload.model_dump(mode="json"),
+        )
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Delete dataset",
+            read_only_hint=False,
+            destructive_hint=True,
+        )
+    )
     async def servicex_delete_dataset(
         dataset_id: int, *, ctx: Context[Any, Any]
-    ) -> str:
+    ) -> Annotated[CallToolResult, ServicexDeleteDatasetResult]:
         """Delete a cached dataset record by its dataset ID."""
         write_error = check_write_allowed(ctx.request_context.lifespan_context)
         if write_error:
@@ -134,4 +208,9 @@ def register(mcp: MCPServer) -> None:
         # record (servicex.servicex_adapter.ServiceXAdapter.delete_dataset),
         # not an unconditional success/failure signal — surface it rather
         # than assuming the delete always succeeded.
-        return f"Dataset {dataset_id} deleted (stale={stale})."
+        text = f"Dataset {dataset_id} deleted (stale={stale})."
+        payload = ServicexDeleteDatasetResult(dataset_id=dataset_id, stale=stale)
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)],
+            structured_content=payload.model_dump(mode="json"),
+        )
