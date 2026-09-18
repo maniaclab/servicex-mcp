@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from mcp.server.mcpserver import Context, MCPServer  # noqa: TC002
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import BaseModel
 
 from servicex_mcp.tools._helpers import (
     build_hints,
@@ -48,6 +50,42 @@ def _transform_to_dict(t: TransformStatus) -> dict[str, Any]:
     }
 
 
+class TransformInfo(BaseModel):
+    """Structured detail of one transform, matching ``_transform_to_dict``."""
+
+    request_id: str
+    title: str | None
+    status: str
+    files: int | None
+    files_completed: int | None
+    files_failed: int | None
+    files_remaining: int | None
+    submit_time: str | None
+    finish_time: str | None
+    log_url: str | None
+
+
+class ServicexListTransformsResult(BaseModel):
+    """Structured result of ``servicex_list_transforms``."""
+
+    transforms: list[TransformInfo]
+    offset: int
+    limit: int
+    truncated: bool
+
+
+class ServicexCancelTransformResult(BaseModel):
+    """Structured result of ``servicex_cancel_transform``."""
+
+    transform_id: str
+
+
+class ServicexDeleteTransformResult(BaseModel):
+    """Structured result of ``servicex_delete_transform``."""
+
+    transform_id: str
+
+
 def register(mcp: MCPServer) -> None:
     """Register the transform-related MCP tools.
 
@@ -55,10 +93,16 @@ def register(mcp: MCPServer) -> None:
     servicex_cancel_transform, and servicex_delete_transform.
     """
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="List transforms",
+            read_only_hint=True,
+            open_world_hint=True,
+        )
+    )
     async def servicex_list_transforms(
         limit: int = 50, offset: int = 0, *, ctx: Context[Any, Any]
-    ) -> str:
+    ) -> Annotated[CallToolResult, ServicexListTransformsResult]:
         """List transforms you have submitted to this ServiceX instance.
 
         Shows status, file completion counts, and timing for each transform.
@@ -70,19 +114,41 @@ def register(mcp: MCPServer) -> None:
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
         if not transforms:
-            return "No transforms found."
+            payload = ServicexListTransformsResult(
+                transforms=[], offset=offset, limit=limit, truncated=False
+            )
+            return CallToolResult(
+                content=[TextContent(type="text", text="No transforms found.")],
+                structured_content=payload.model_dump(mode="json"),
+            )
         rows, footer = paginate_iter(
             (_transform_to_dict(t) for t in transforms), limit, offset
         )
         hints = build_hints(
             ["Use `servicex_get_transform_status` with a request_id for full detail"]
         )
-        return format_list(rows, include_keys=_TRANSFORM_KEYS) + footer + hints
+        text = format_list(rows, include_keys=_TRANSFORM_KEYS) + footer + hints
+        payload = ServicexListTransformsResult(
+            transforms=[TransformInfo(**row) for row in rows],
+            offset=offset,
+            limit=limit,
+            truncated=bool(footer),
+        )
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)],
+            structured_content=payload.model_dump(mode="json"),
+        )
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Get transform status",
+            read_only_hint=True,
+            open_world_hint=True,
+        )
+    )
     async def servicex_get_transform_status(
         transform_id: str, *, ctx: Context[Any, Any]
-    ) -> str:
+    ) -> Annotated[CallToolResult, TransformInfo]:
         """Get the full status of one transform by its request ID.
 
         Includes a log_url for debugging once the transform completes.
@@ -98,12 +164,23 @@ def register(mcp: MCPServer) -> None:
                 "Use `servicex_delete_transform` to remove a finished one",
             ]
         )
-        return format_dict(_transform_to_dict(t)) + hints
+        text = format_dict(_transform_to_dict(t)) + hints
+        payload = TransformInfo(**_transform_to_dict(t))
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)],
+            structured_content=payload.model_dump(mode="json"),
+        )
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Cancel transform",
+            read_only_hint=False,
+            destructive_hint=True,
+        )
+    )
     async def servicex_cancel_transform(
         transform_id: str, *, ctx: Context[Any, Any]
-    ) -> str:
+    ) -> Annotated[CallToolResult, ServicexCancelTransformResult]:
         """Cancel a running transform by its request ID."""
         write_error = check_write_allowed(ctx.request_context.lifespan_context)
         if write_error:
@@ -117,12 +194,23 @@ def register(mcp: MCPServer) -> None:
             await asyncio.to_thread(client.cancel_transform, transform_id)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
-        return f"Transform {transform_id} cancelled."
+        text = f"Transform {transform_id} cancelled."
+        payload = ServicexCancelTransformResult(transform_id=transform_id)
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)],
+            structured_content=payload.model_dump(mode="json"),
+        )
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Delete transform",
+            read_only_hint=False,
+            destructive_hint=True,
+        )
+    )
     async def servicex_delete_transform(
         transform_id: str, *, ctx: Context[Any, Any]
-    ) -> str:
+    ) -> Annotated[CallToolResult, ServicexDeleteTransformResult]:
         """Delete a transform record (and its cache entry) by request ID."""
         write_error = check_write_allowed(ctx.request_context.lifespan_context)
         if write_error:
@@ -134,4 +222,9 @@ def register(mcp: MCPServer) -> None:
             await asyncio.to_thread(client.delete_transform, transform_id)
         except Exception as exc:  # noqa: BLE001
             return classify_error(exc)
-        return f"Transform {transform_id} deleted."
+        text = f"Transform {transform_id} deleted."
+        payload = ServicexDeleteTransformResult(transform_id=transform_id)
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)],
+            structured_content=payload.model_dump(mode="json"),
+        )
