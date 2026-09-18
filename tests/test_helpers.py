@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from af_credentials.proxy import ProxyNotAvailableError, ProxyRedeemError
+from mcp.types import CallToolResult, TextContent
 
 from servicex_mcp.auth.factory import EnvBasedClientFactory
 from servicex_mcp.tools._helpers import (
@@ -18,6 +19,13 @@ from servicex_mcp.tools._helpers import (
     human_bytes,
     paginate_iter,
 )
+
+
+def _error_text(result: CallToolResult) -> str:
+    """Extract the sole text block's content from an is_error CallToolResult."""
+    block = result.content[0]
+    assert isinstance(block, TextContent)
+    return block.text
 
 
 class TestHumanBytes:
@@ -254,45 +262,57 @@ def test_get_servicex_client_reads_lifespan_context() -> None:
 
 
 class TestClassifyError:
+    def test_returns_an_is_error_call_tool_result(self) -> None:
+        result = classify_error(ValueError("bad"))
+        assert isinstance(result, CallToolResult)
+        assert result.is_error is True
+        assert result.structured_content is None
+
     def test_authorization_error_by_type_name(self) -> None:
         class AuthorizationError(Exception):
             pass
 
-        result = classify_error(AuthorizationError("nope"))
+        result = _error_text(classify_error(AuthorizationError("nope")))
         assert result.startswith("Error: nope")
         assert "**Recovery:**" in result
         assert "servicex_info" in result
 
     def test_authorization_error_by_message(self) -> None:
-        result = classify_error(Exception("You are not authorized to do this"))
+        result = _error_text(
+            classify_error(Exception("You are not authorized to do this"))
+        )
         assert "**Recovery:**" in result
         assert "refresh token" in result
 
     def test_not_found_category(self) -> None:
-        result = classify_error(Exception("Transform request-xyz not found"))
+        result = _error_text(
+            classify_error(Exception("Transform request-xyz not found"))
+        )
         assert "**Recovery:**" in result
         assert "servicex_list_transforms" in result
         assert "servicex_list_datasets" in result
 
     def test_invalid_transform_request_category(self) -> None:
-        result = classify_error(ValueError("Invalid transform request: bad codegen"))
+        result = _error_text(
+            classify_error(ValueError("Invalid transform request: bad codegen"))
+        )
         assert "**Recovery:**" in result
         assert "servicex_list_code_generators" in result
 
     def test_connection_error_by_type_name(self) -> None:
-        result = classify_error(ConnectionError("boom"))
+        result = _error_text(classify_error(ConnectionError("boom")))
         assert "**Recovery:**" in result
         assert "servicex_info" in result
 
     def test_timeout_category_via_message(self) -> None:
-        result = classify_error(Exception("request timeout exceeded"))
+        result = _error_text(classify_error(Exception("request timeout exceeded")))
         assert "**Recovery:**" in result
         assert "servicex_info" in result
 
     def test_timeout_error_by_type_name_with_no_matching_message(self) -> None:
         # asyncio.TimeoutError's __name__ is "TimeoutError"; its message may not
         # contain the literal substring "timeout" (e.g. raised with no args).
-        result = classify_error(TimeoutError())
+        result = _error_text(classify_error(TimeoutError()))
         assert "**Recovery:**" in result
         assert "servicex_info" in result
 
@@ -300,37 +320,45 @@ class TestClassifyError:
         # A bare TimeoutError() (e.g. from a broker redeem call exceeding
         # ProxyClient's timeout) has an empty str(exc); the displayed error
         # must still say *something* happened, not "Error: \n\n**Recovery:**...".
-        result = classify_error(TimeoutError())
+        result = _error_text(classify_error(TimeoutError()))
         assert result.startswith("Error: TimeoutError")
 
     def test_other_category_has_no_recovery_block(self) -> None:
-        result = classify_error(Exception("something completely unexpected"))
+        result = _error_text(
+            classify_error(Exception("something completely unexpected"))
+        )
         assert result == "Error: something completely unexpected"
         assert "Recovery" not in result
 
     def test_other_category_blank_message_falls_back_to_exception_type_name(
         self,
     ) -> None:
-        result = classify_error(Exception())
+        result = _error_text(classify_error(Exception()))
         assert result == "Error: Exception"
 
     def test_proxy_not_available_error_category(self) -> None:
-        result = classify_error(ProxyNotAvailableError("no linked credential"))
+        result = _error_text(
+            classify_error(ProxyNotAvailableError("no linked credential"))
+        )
         assert result.startswith("Error: no linked credential")
         assert "**Recovery:**" in result
         assert "link" in result.lower()
 
     def test_proxy_redeem_error_category(self) -> None:
-        result = classify_error(ProxyRedeemError(502, "broker unreachable"))
+        result = _error_text(
+            classify_error(ProxyRedeemError(502, "broker unreachable"))
+        )
         assert "**Recovery:**" in result
         assert "servicex_info" in result
 
 
 class TestCheckWriteAllowed:
-    def test_read_only_true_returns_error_string(self) -> None:
+    def test_read_only_true_returns_is_error_call_tool_result(self) -> None:
         result = check_write_allowed({"read_only": True})
         assert result is not None
-        assert "read-only mode" in result
+        assert isinstance(result, CallToolResult)
+        assert result.is_error is True
+        assert "read-only mode" in _error_text(result)
 
     def test_read_only_false_returns_none(self) -> None:
         assert check_write_allowed({"read_only": False}) is None
