@@ -17,6 +17,8 @@ from servicex_mcp.tools.transforms import register
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from mcp.types import CallToolResult
+
 
 def _sync_facade_over_asyncio_run() -> None:
     """Mimic ServiceXClient.cancel_transform/delete_transform's real shape.
@@ -37,7 +39,7 @@ def _sync_facade_over_asyncio_run() -> None:
 
 
 @pytest.fixture
-def registered_tools() -> dict[str, Callable[..., Awaitable[str]]]:
+def registered_tools() -> dict[str, Callable[..., Awaitable[CallToolResult]]]:
     mcp = MCPServer("test")
     register(mcp)
     return {tool.name: tool.fn for tool in mcp._tool_manager.list_tools()}
@@ -78,69 +80,89 @@ def _make_transform_status(**overrides: object) -> TransformStatus:
 class TestServicexListTransforms:
     async def test_returns_table(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_servicex_client.get_transforms_async = AsyncMock(
             return_value=[_make_transform_status(request_id="req-1")]
         )
         fn = registered_tools["servicex_list_transforms"]
         result = await fn(ctx=mock_ctx)
-        assert "req-1" in result
-        assert "Complete" in result
-        assert "servicex_get_transform_status" in result
+        text = tool_text(result)
+        assert "req-1" in text
+        assert "Complete" in text
+        assert "servicex_get_transform_status" in text
+        assert result.structured_content is not None
+        assert result.structured_content["transforms"][0]["request_id"] == "req-1"
+        assert result.structured_content["truncated"] is False
 
     async def test_empty_list_returns_message(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_servicex_client.get_transforms_async = AsyncMock(return_value=[])
         fn = registered_tools["servicex_list_transforms"]
         result = await fn(ctx=mock_ctx)
-        assert result == "No transforms found."
+        assert tool_text(result) == "No transforms found."
+        assert result.structured_content == {
+            "transforms": [],
+            "offset": 0,
+            "limit": 50,
+            "truncated": False,
+        }
 
     async def test_pagination_via_limit_and_offset(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         transforms = [_make_transform_status(request_id=f"req-{i}") for i in range(3)]
         mock_servicex_client.get_transforms_async = AsyncMock(return_value=transforms)
         fn = registered_tools["servicex_list_transforms"]
         result = await fn(limit=2, offset=0, ctx=mock_ctx)
-        assert "req-0" in result
-        assert "req-1" in result
-        assert "req-2" not in result
-        assert "offset=2" in result
+        text = tool_text(result)
+        assert "req-0" in text
+        assert "req-1" in text
+        assert "req-2" not in text
+        assert "offset=2" in text
+        assert result.structured_content is not None
+        assert result.structured_content["truncated"] is True
 
         result_page_2 = await fn(limit=2, offset=2, ctx=mock_ctx)
-        assert "req-2" in result_page_2
-        assert "req-0" not in result_page_2
+        text_page_2 = tool_text(result_page_2)
+        assert "req-2" in text_page_2
+        assert "req-0" not in text_page_2
 
     async def test_returns_error_on_exception(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_servicex_client.get_transforms_async = AsyncMock(
             side_effect=ConnectionError("unreachable")
         )
         fn = registered_tools["servicex_list_transforms"]
         result = await fn(ctx=mock_ctx)
-        assert result.startswith("Error:")
+        assert tool_text(result).startswith("Error:")
+        assert result.is_error is True
 
 
 class TestServicexGetTransformStatus:
     async def test_returns_detail(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_servicex_client.get_transform_status_async = AsyncMock(
             return_value=_make_transform_status(
@@ -149,108 +171,128 @@ class TestServicexGetTransformStatus:
         )
         fn = registered_tools["servicex_get_transform_status"]
         result = await fn(transform_id="req-42", ctx=mock_ctx)
-        assert "req-42" in result
-        assert "Complete" in result
-        assert "servicex_cancel_transform" in result
-        assert "servicex_delete_transform" in result
+        text = tool_text(result)
+        assert "req-42" in text
+        assert "Complete" in text
+        assert "servicex_cancel_transform" in text
+        assert "servicex_delete_transform" in text
+        assert result.structured_content is not None
+        assert result.structured_content["request_id"] == "req-42"
+        assert result.structured_content["log_url"] == "http://log"
 
     async def test_returns_error_when_not_found(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_servicex_client.get_transform_status_async = AsyncMock(
             side_effect=ValueError("Transform req-missing not found")
         )
         fn = registered_tools["servicex_get_transform_status"]
         result = await fn(transform_id="req-missing", ctx=mock_ctx)
-        assert result.startswith("Error:")
+        assert tool_text(result).startswith("Error:")
+        assert result.is_error is True
 
 
 class TestServicexCancelTransform:
     async def test_cancels_transform(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_servicex_client.cancel_transform = MagicMock(
             side_effect=lambda _transform_id: _sync_facade_over_asyncio_run()
         )
         fn = registered_tools["servicex_cancel_transform"]
         result = await fn(transform_id="req-1", ctx=mock_ctx)
-        assert "req-1" in result
-        assert "cancelled" in result.lower()
+        text = tool_text(result)
+        assert "req-1" in text
+        assert "cancelled" in text.lower()
+        assert result.structured_content == {"transform_id": "req-1"}
         mock_servicex_client.cancel_transform.assert_called_once_with("req-1")
 
     async def test_read_only_mode_blocks_cancel(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx_readonly: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         fn = registered_tools["servicex_cancel_transform"]
         result = await fn(transform_id="req-1", ctx=mock_ctx_readonly)
-        assert result == (
+        assert tool_text(result) == (
             "Error: server is running in read-only mode (--read-only flag). "
             "This operation modifies ServiceX state and is not permitted."
         )
+        assert result.is_error is True
         mock_servicex_client.cancel_transform.assert_not_called()
 
     async def test_returns_error_on_exception(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_servicex_client.cancel_transform = MagicMock(
             side_effect=ValueError("Transform req-1 not found")
         )
         fn = registered_tools["servicex_cancel_transform"]
         result = await fn(transform_id="req-1", ctx=mock_ctx)
-        assert result.startswith("Error:")
+        assert tool_text(result).startswith("Error:")
+        assert result.is_error is True
 
 
 class TestServicexDeleteTransform:
     async def test_deletes_transform(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_servicex_client.delete_transform = MagicMock(
             side_effect=lambda _transform_id: _sync_facade_over_asyncio_run()
         )
         fn = registered_tools["servicex_delete_transform"]
         result = await fn(transform_id="req-1", ctx=mock_ctx)
-        assert "req-1" in result
-        assert "deleted" in result.lower()
+        text = tool_text(result)
+        assert "req-1" in text
+        assert "deleted" in text.lower()
+        assert result.structured_content == {"transform_id": "req-1"}
         mock_servicex_client.delete_transform.assert_called_once_with("req-1")
 
     async def test_read_only_mode_blocks_delete(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx_readonly: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         fn = registered_tools["servicex_delete_transform"]
         result = await fn(transform_id="req-1", ctx=mock_ctx_readonly)
-        assert result == (
+        assert tool_text(result) == (
             "Error: server is running in read-only mode (--read-only flag). "
             "This operation modifies ServiceX state and is not permitted."
         )
+        assert result.is_error is True
         mock_servicex_client.delete_transform.assert_not_called()
 
     async def test_returns_error_on_exception(
         self,
-        registered_tools: dict[str, Callable[..., Awaitable[str]]],
+        registered_tools: dict[str, Callable[..., Awaitable[CallToolResult]]],
         mock_ctx: MagicMock,
         mock_servicex_client: MagicMock,
+        tool_text: Callable[[CallToolResult], str],
     ) -> None:
         mock_servicex_client.delete_transform = MagicMock(
             side_effect=ValueError("Transform req-1 not found")
         )
         fn = registered_tools["servicex_delete_transform"]
         result = await fn(transform_id="req-1", ctx=mock_ctx)
-        assert result.startswith("Error:")
+        assert tool_text(result).startswith("Error:")
+        assert result.is_error is True

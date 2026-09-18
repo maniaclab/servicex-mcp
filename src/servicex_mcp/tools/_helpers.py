@@ -5,6 +5,8 @@ from __future__ import annotations
 import itertools
 from typing import TYPE_CHECKING, Any
 
+from mcp.types import CallToolResult, TextContent
+
 if TYPE_CHECKING:
     from servicex.servicex_client import ServiceXClient
 
@@ -83,11 +85,15 @@ def build_hints(hints: list[str]) -> str:
     return f"\n\n**Next steps:**\n{lines}"
 
 
-def classify_error(exc: Exception) -> str:
-    """Return an actionable error message with recovery guidance.
+def classify_error(exc: Exception) -> CallToolResult:
+    """Return an actionable ``is_error`` result with recovery guidance.
 
     Pattern-matches on exception type name and message text to provide
-    specific recovery steps rather than a bare traceback string.
+    specific recovery steps rather than a bare traceback string. No
+    ``structured_content`` is set: an error result carries no structured
+    payload (mcp SDK's ``convert_result`` only validates
+    ``structured_content`` against the tool's output model when
+    ``is_error`` is false).
     """
     exc_type = type(exc).__name__
     # A bare exception (e.g. a ProxyClient redeem call raising a timeout with
@@ -148,9 +154,13 @@ def classify_error(exc: Exception) -> str:
             "Use `servicex_info` to check server connectivity and try again."
         )
     else:
-        return f"Error: {exc_msg}"
+        text = f"Error: {exc_msg}"
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)], is_error=True
+        )
 
-    return f"Error: {exc_msg}\n\n**Recovery:** {guidance}"
+    text = f"Error: {exc_msg}\n\n**Recovery:** {guidance}"
+    return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
 
 
 _READ_ONLY_ERROR = (
@@ -159,10 +169,12 @@ _READ_ONLY_ERROR = (
 )
 
 
-def check_write_allowed(lifespan_context: dict[str, Any]) -> str | None:
-    """Return an error string if write operations are disabled, else None."""
+def check_write_allowed(lifespan_context: dict[str, Any]) -> CallToolResult | None:
+    """Return an ``is_error`` result if write operations are disabled, else None."""
     if lifespan_context.get("read_only"):
-        return _READ_ONLY_ERROR
+        return CallToolResult(
+            content=[TextContent(type="text", text=_READ_ONLY_ERROR)], is_error=True
+        )
     return None
 
 
