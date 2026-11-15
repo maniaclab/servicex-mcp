@@ -154,7 +154,7 @@ class ToolCallLogMiddleware(ServerMiddleware[Any]):
                 case CallToolResult(is_error=True) | {"isError": True}:
                     outcome = "error"
                 case _:
-                    outcome = "ok"
+                    outcome = "success"
         finally:
             log.info(
                 "tool.call",
