@@ -242,7 +242,7 @@ def test_tool_call_line_has_the_standard_fields_and_the_request_id(
     assert result["result"]["isError"] is False
     (call,) = _server_lines(log_stream, "tool.call")
     assert call["tool"] == "servicex_info"
-    assert call["outcome"] == "ok"
+    assert call["outcome"] == "success"
     assert call["request_id"] == "abc"
     assert call["duration_ms"] >= 0
     assert {"timestamp", "level", "logger"} <= call.keys()
