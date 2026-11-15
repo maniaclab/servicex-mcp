@@ -27,6 +27,13 @@ tool invocation writes a `tool.call` line with `tool`, `duration_ms` and
 `outcome` (`success` or `error`). The stdio transport keeps plain-text logs on
 stderr, because stdout carries the protocol.
 
+## Health probe (HTTP transport)
+
+`GET /healthz` answers `200 {"status": "ok"}` without authentication and is what
+the chart's liveness and readiness probes call. It reports this process only,
+not the ServiceX backend, so a ServiceX outage does not take the server out of
+rotation. A successful probe writes no access-log line; a failing one does.
+
 ## Available tools
 
 | Tool                            | Does                                                                  | Read/write  |
