@@ -30,6 +30,7 @@ from servicex_mcp.auth.factory import (
     ServiceXRedeemer,
 )
 from servicex_mcp.auth.session_cache import SessionCache
+from servicex_mcp.observability import RequestLogMiddleware, ToolCallLogMiddleware
 from servicex_mcp.tools import datasets, info, submit, transforms
 
 _STDIO_PREAMBLE = (
@@ -58,7 +59,12 @@ def _make_stdio_mcp(
         finally:
             factory.close()
 
-    mcp = MCPServer("servicex-mcp", lifespan=_lifespan, instructions=_STDIO_PREAMBLE)
+    mcp = MCPServer(
+        "servicex-mcp",
+        lifespan=_lifespan,
+        instructions=_STDIO_PREAMBLE,
+        middleware=[ToolCallLogMiddleware()],
+    )
 
     for _module in [info, transforms, datasets, submit]:
         _module.register(mcp)
@@ -245,6 +251,7 @@ def _make_broker_http_mcp(
         "servicex-mcp",
         instructions=_HTTP_PREAMBLE,
         lifespan=_broker_lifespan,
+        middleware=[ToolCallLogMiddleware()],
     )
 
     for _module in [info, transforms, datasets, submit]:
@@ -299,6 +306,7 @@ def _make_http_mcp(
         "servicex-mcp",
         instructions=_HTTP_PREAMBLE,
         lifespan=_http_lifespan,
+        middleware=[ToolCallLogMiddleware()],
         auth_server_provider=provider,
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(resource_url),
@@ -338,10 +346,22 @@ def serve_http(
     http_app = mcp.streamable_http_app(
         transport_security=_transport_security_from_resource_url(resource_url)
     )
-    app = _CimdMetadataMiddleware(_AuthorizeContextMiddleware(http_app))
-    # log_level is forwarded explicitly: uvicorn's own "uvicorn"/"uvicorn.error"/
-    # "uvicorn.access" loggers are configured with propagate=False by its
-    # default LOGGING_CONFIG, so they never inherit the level set on the root
-    # logger via logging.basicConfig() in cli.py -- without this, --log-level
-    # controls this app's own logs but not uvicorn's startup/access noise.
-    uvicorn.run(app, host=host, port=port, log_level=log_level)
+    app = RequestLogMiddleware(
+        _CimdMetadataMiddleware(_AuthorizeContextMiddleware(http_app))
+    )
+    # log_config=None leaves logging as cli.py configured it (JSON on the root
+    # logger), so uvicorn's own lines propagate to it instead of being written
+    # by its plain-text handlers; access_log=False because RequestLogMiddleware
+    # writes the access line (with the request id, and no line for a
+    # successful probe).
+    # log_level is forwarded explicitly: uvicorn sets its own loggers' level
+    # from it, so --log-level controls uvicorn's startup noise as well as this
+    # app's own logs.
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level=log_level,
+        log_config=None,
+        access_log=False,
+    )

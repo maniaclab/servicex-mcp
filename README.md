@@ -18,6 +18,15 @@ servicex-mcp serve --backend <name-from-your-.servicex-file>
 
 See `docs/plans/` for the design and implementation plan.
 
+## Logging (HTTP transport)
+
+`serve --transport http` writes one JSON object per line to stdout, including
+uvicorn's own lines. The AF MCP broker's `X-Request-ID` is logged as
+`request_id` on every line of the request (one is generated if absent), and each
+tool invocation writes a `tool.call` line with `tool`, `duration_ms` and
+`outcome` (`ok` or `error`). The stdio transport keeps plain-text logs on
+stderr, because stdout carries the protocol.
+
 ## Available tools
 
 | Tool                            | Does                                                                  | Read/write  |

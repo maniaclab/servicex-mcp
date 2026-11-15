@@ -6,6 +6,7 @@ import argparse
 import logging
 import sys
 
+from servicex_mcp.observability import configure_json_logging
 from servicex_mcp.server import serve, serve_http
 
 
@@ -81,20 +82,23 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "serve":
-        # basicConfig's default stream is stderr — this must stay that way:
-        # stdio transport carries MCP's JSON-RPC framing on stdout, and any
-        # log line written there would corrupt the protocol.
-        logging.basicConfig(
-            level=getattr(logging, args.log_level.upper()),
-            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        )
         if args.transport == "stdio":
+            # basicConfig's default stream is stderr — this must stay that way:
+            # stdio transport carries MCP's JSON-RPC framing on stdout, and any
+            # log line written there would corrupt the protocol.
+            logging.basicConfig(
+                level=getattr(logging, args.log_level.upper()),
+                format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            )
             serve(
                 backend=args.backend,
                 config_path=args.config_path,
                 read_only=args.read_only,
             )
         else:
+            # HTTP transport has no stdout framing to protect: write JSON lines
+            # there, where the platform's log collection reads them.
+            configure_json_logging(args.log_level)
             if not args.backend_url or not args.resource_url:
                 parser.error(
                     "--transport http requires --backend-url and --resource-url"

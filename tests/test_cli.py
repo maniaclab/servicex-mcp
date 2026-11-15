@@ -312,6 +312,41 @@ class TestCLIServe:
             main()
         assert mock_basic_config.call_args.kwargs["level"] == 10  # logging.DEBUG
 
+    def test_http_transport_logs_json_to_stdout_at_the_requested_level(self) -> None:
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "servicex-mcp",
+                    "serve",
+                    "--transport",
+                    "http",
+                    "--backend-url",
+                    "https://servicex.example.com",
+                    "--resource-url",
+                    "https://servicex-mcp.example.org",
+                    "--log-level",
+                    "debug",
+                ],
+            ),
+            patch("servicex_mcp.cli.serve_http"),
+            patch("servicex_mcp.cli.configure_json_logging") as mock_json,
+            patch("logging.basicConfig") as mock_basic_config,
+        ):
+            main()
+        mock_json.assert_called_once_with("debug")
+        mock_basic_config.assert_not_called()
+
+    def test_stdio_transport_keeps_plain_logs_off_stdout(self) -> None:
+        with (
+            patch("sys.argv", ["servicex-mcp", "serve"]),
+            patch("servicex_mcp.cli.serve"),
+            patch("servicex_mcp.cli.configure_json_logging") as mock_json,
+            patch("logging.basicConfig"),
+        ):
+            main()
+        mock_json.assert_not_called()
+
     def test_log_level_rejects_invalid_value(self) -> None:
         with (
             patch("sys.argv", ["servicex-mcp", "serve", "--log-level", "bogus"]),
