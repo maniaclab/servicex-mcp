@@ -14,9 +14,12 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl
 from servicex.servicex_client import ServiceXClient
+from starlette.responses import JSONResponse
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, MutableMapping
+
+    from starlette.requests import Request
 
 from servicex_mcp.auth.bridge_provider import (
     ServiceXBridgeProvider,
@@ -85,6 +88,21 @@ _HTTP_PREAMBLE = (
     "Authentication uses your personal ServiceX refresh token via the OAuth "
     "2.1 bridge — no local .servicex file is required."
 )
+
+
+def _register_healthz(mcp: MCPServer) -> None:
+    """Serve ``GET /healthz``, the liveness and readiness probe, with no auth.
+
+    It reports this process only: the ServiceX backend being down must not take
+    the server out of rotation, and a probe holds no user credential to call it.
+    """
+
+    async def _healthz(_request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
+
+    # Call form instead of decorator: custom_route lacks a return annotation
+    # in the SDK, and an untyped decorator strips _healthz's type under mypy.
+    mcp.custom_route("/healthz", methods=["GET"])(_healthz)
 
 
 class _AuthorizeContextMiddleware:
@@ -254,6 +272,7 @@ def _make_broker_http_mcp(
         middleware=[ToolCallLogMiddleware()],
     )
 
+    _register_healthz(mcp)
     for _module in [info, transforms, datasets, submit]:
         _module.register(mcp)
 
@@ -318,6 +337,7 @@ def _make_http_mcp(
     )
 
     register_bridge_routes(mcp, provider)
+    _register_healthz(mcp)
     for _module in [info, transforms, datasets, submit]:
         _module.register(mcp)
 
